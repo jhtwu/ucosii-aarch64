@@ -22,6 +22,7 @@
 #define WHITE "\033[1;37m"
 
 #include  <ucos_ii.h>
+#include  "portable_libc.h"
 
 #define dump(x,y) NOTHING()
 #define dump2(x,y) NOTHING()

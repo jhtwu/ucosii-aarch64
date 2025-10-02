@@ -3,8 +3,8 @@
 # Defines the cross-compilation tools required to build the bare-metal AArch64 firmware.
 # 定義建置裸機 AArch64 韌體所需的交叉編譯工具。
 # ======================================================================================
-TOOLCHAIN = aarch64-thunderx-elf
-# TOOLCHAIN = /home/dylan/desktop/kvm/buildroot/output/host/bin/aarch64-buildroot-linux-uclibc
+TOOLCHAIN = aarch64-linux-gnu
+# TOOLCHAIN = aarch64-thunderx-elf
 TARGET    = kernel.elf
 ARMARCH   = armv8-a
 CORE      = cortex-a57
@@ -30,10 +30,10 @@ BINDIR = bin
 # 彙整編譯器、組譯器與連結器所需的參數。
 # ======================================================================================
 LFILE  = $(SRCDIR)/linker.ld
-CFLAGS = -std=gnu11 -w -nostartfiles -fno-exceptions -mcpu=$(CORE) -static -g -I$(SRCDIR) -fstack-usage -mabi=ilp32
-AFLAGS = -g -mabi=ilp32 -I$(SRCDIR)
+CFLAGS = -std=gnu11 -w -nostartfiles -fno-exceptions -ffreestanding -fno-builtin -fno-stack-protector -mcpu=$(CORE) -static -g -I$(SRCDIR) -fstack-usage
+AFLAGS = -g -I$(SRCDIR)
 LINKER = $(CC) -o
-LFLAGS = -w -T $(LFILE) -nostartfiles -fno-exceptions -mcpu=$(CORE) -static -g -lc -mabi=ilp32
+LFLAGS = -w -T $(LFILE) -nostartfiles -nostdlib -fno-exceptions -mcpu=$(CORE) -static -g
 
 # ======================================================================================
 # Debugging / Emulation Tools / 除錯與模擬工具設定
