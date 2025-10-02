@@ -279,6 +279,7 @@ unsigned int arch_timer_reg_read_cp15(int access, enum arch_timer_reg reg)
 
 void cp15_virt_timer_init()
 {
+	// Program EL1 virtual timer for the next OS tick / 設定 EL1 虛擬計時器以安排下一個系統節拍
 //	uart_puts("cp15_virt_timer_init\n");
 	arch_timer_reg_write_cp15(ARCH_TIMER_VIRT_ACCESS,0,7);
 	arch_timer_reg_write_cp15(ARCH_TIMER_VIRT_ACCESS,1,614000);
@@ -304,7 +305,7 @@ void cp15_virt_timer_init()
 
 void  BSP_OS_TmrTickHandler(CPU_INT32U cpu_id)
 {
-    ARM_PTMR_REG_PTISR = 0x01u;                                 /* Clear the interrupt.                                 */
+    ARM_PTMR_REG_PTISR = 0x01u;                                 /* Clear the interrupt / 清除私有計時器中斷旗標 */
 	static int i=0;
 #if 1 //def TASK_DBG
 	i++;
@@ -313,7 +314,7 @@ void  BSP_OS_TmrTickHandler(CPU_INT32U cpu_id)
 		uart_puthex(OSIntNesting);
 	}
 #endif
-    OSTimeTick();
+    OSTimeTick();                                              /* Drive µC/OS-II scheduler / 推進 µC/OS-II 排程器 */
 	unsigned int ctrl;
 	ctrl = arch_timer_reg_read_cp15(ARCH_TIMER_VIRT_ACCESS,ARCH_TIMER_REG_CTRL);
 		
@@ -323,7 +324,7 @@ void  BSP_OS_TmrTickHandler(CPU_INT32U cpu_id)
 		arch_timer_reg_write_cp15(ARCH_TIMER_VIRT_ACCESS,ARCH_TIMER_REG_CTRL,ctrl);
 	}
 
-	cp15_virt_timer_init();
+	cp15_virt_timer_init();                                      /* Re-arm virtual timer / 重新啟動虛擬計時器 */
 /*
 	int val=0x2;
 	asm volatile("msr cntkctl_el1,%x0" : : "rZ" (val));
@@ -366,7 +367,7 @@ void  BSP_OS_TmrTickHandler(CPU_INT32U cpu_id)
 void BSP_OS_TmrTickInit(CPU_INT32U tick_rate)
 {
 	uart_puts("BSP_OS_TmrTickInit\n");
-
+	// Enable EL1 access, program tick period, and connect GIC vector 27 / 開啟 EL1 訪問、設定節拍週期並連結 GIC 向量 27
 
 	//write_sysreg(cntkctl, cntkctl_el1);
 	int val=0x2;

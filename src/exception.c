@@ -18,5 +18,6 @@ void sync_trap_handler()
 
 void common_irq_trap_handler()
 {
+	// Forward IRQs (including timer tick) to the shared dispatcher / 將包含計時器在內的 IRQ 轉送至共用分派器
 	BSP_IntHandler();
 }

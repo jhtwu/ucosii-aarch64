@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include "cpu.h"
 
-volatile timer804_t* const tregs = (timer804_t*)TIMER_BASE;
+volatile timer804_t* const tregs = (timer804_t*)TIMER_BASE;  // Legacy SP804 timer base / 舊版 SP804 計時器基址
 volatile uint32_t counter;
 void timer_handler(void){
 //	printf("counter is: %lu\n",counter++);
@@ -12,6 +12,7 @@ void timer_handler(void){
 }
 void timer_init(void){
 	counter = 0;
+	// Legacy SP804 setup kept for reference / 保留供參考的 SP804 設定流程
 	tregs->timers[0].Control = SP804_TIMER_PERIODIC | SP804_TIMER_32BIT  | SP804_TIMER_PRESCALE_256 | SP804_TIMER_INT_ENABLE;
 	tregs->timers[0].Load = 0;
 	tregs->timers[0].Value = 0;

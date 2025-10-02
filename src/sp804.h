@@ -25,5 +25,5 @@ typedef volatile struct {
     } timers[2];
 } timer804_t;
 
-void timer_init(void);
+void timer_init(void);  /* Legacy SP804 tick source / 舊版 SP804 節拍來源 */
 #endif

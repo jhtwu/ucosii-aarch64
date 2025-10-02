@@ -95,7 +95,7 @@ typedef   CPU_INT16U   BSP_OS_SEM_VAL;
 *********************************************************************************************************
 */
 
-void          BSP_OS_TmrTickInit        (CPU_INT32U      tick_rate);
+void          BSP_OS_TmrTickInit        (CPU_INT32U      tick_rate);   /* Configure OS tick timer / 設定作業系統節拍計時器 */
 void          BSP_OS_TimeDlyMs          (CPU_INT32U      dly_ms);
 
 void          BSP_OS_TmrTickISR_Handler (CPU_INT32U      cpu_id);

@@ -405,7 +405,7 @@ static void  AppTaskStart (void *p_arg)
 	uart_puts("create AppTaskCreate ...\n");
     AppTaskCreate();                                           /* Create application tasks                             */
 
-	//ruby: put timer here to avoid timer continue to happen before task create
+	// Start the system tick after tasks exist to avoid early interrupts / 任務建立後才啟動系統時脈以避免過早觸發
 	BSP_OS_TmrTickInit(1000);
 		// dump(__func__,__LINE__);
 

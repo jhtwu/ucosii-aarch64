@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include "includes.h"
 
-func_t isr_table[MAXIRQNUM];
+func_t isr_table[MAXIRQNUM];  // Legacy bare-metal vector table / 舊版裸機中斷向量表
 void install_isr(IRQn_Type irq_num, func_t handler){
 	isr_table[irq_num] = handler;
 }
@@ -38,6 +38,7 @@ void __attribute__ ((interrupt("NOT_USED"))) not_used_handler(void){
 }
 
 void __attribute__ ((interrupt("IRQ"))) c_irq(void){
+	// Legacy IRQ entry (new OS flow uses BSP_IntHandler) / 傳統 IRQ 入口（新流程改由 BSP_IntHandler 處理）
 	// asm volatile("cpsid i" : : : "memory", "cc");
     dump2(__func__,__LINE__);
 	int irq_num = GIC_AcknowledgePending();

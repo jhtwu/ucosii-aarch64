@@ -66,9 +66,9 @@ void        BSP_IntTargetSet    (CPU_INT32U        int_id,
 CPU_BOOLEAN BSP_IntVectSet      (CPU_INT32U        int_id,
                                  CPU_INT32U        int_prio,
                                  CPU_INT08U        int_target_list,
-                                 BSP_INT_FNCT_PTR  int_fnct);
+                                 BSP_INT_FNCT_PTR  int_fnct);   /* Register ISR with GIC table / 將中斷服務程式註冊到 GIC */
 
-void        BSP_IntHandler      (void);
+void        BSP_IntHandler      (void);                         /* Shared IRQ dispatcher / 共用 IRQ 分派入口 */
 
 void        BSP_SGITrig         (CPU_INT32U        int_sgi);
 

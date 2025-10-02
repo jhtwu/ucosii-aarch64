@@ -426,6 +426,7 @@ OS_CPU_ARM_ExceptIrqHndlr:
     LDR  w1, [x0]
     MOV  sp, x1
 
+	// Route IRQ to shared C handler for OS tick / 將 IRQ 轉給 C 層處理以驅動系統節拍
 	bl common_irq_trap_handler
     //BL   OS_CPU_ExceptHndlr
 
@@ -443,6 +444,7 @@ OS_CPU_ARM_ExceptIrqHndlr:
 OS_CPU_ARM_ExceptHndlr_BreakExcept:
 
     .global  OS_CPU_ExceptHndlr
+	// Shared breakpoint/IRQ path into BSP dispatcher / 透過共用入口將 IRQ 交給 BSP 分派器
 	bl common_irq_trap_handler
     //BL   OS_CPU_ExceptHndlr
 
@@ -470,4 +472,3 @@ OS_CPU_SIMDGet:
     MOV x0, #1
 
     RET
-

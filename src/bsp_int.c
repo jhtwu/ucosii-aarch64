@@ -512,6 +512,7 @@ CPU_BOOLEAN  BSP_IntVectSet (CPU_INT32U       int_id,
                      int_target_list);
 #endif
     BSP_IntVectTbl[int_id] = int_fnct;
+    /* Cache ISR for GIC dispatch / 儲存 GIC 中斷對應的 ISR */
 
     CPU_CRITICAL_EXIT();
 
@@ -563,6 +564,7 @@ void  BSP_IntHandler (void)
     int_cpu = (int_ack & DEF_BIT_FIELD(12u, 2u)) >> 10u;        /* Extract the interrupt source.                        */
 
     p_isr = BSP_IntVectTbl[int_id];                             /* Fetch ISR handler.                                   */
+    /* Dispatch registered ISR (timer tick, peripherals, etc.) / 呼叫已註冊的 ISR（包含系統節拍與周邊） */
 
 //	if(int_id!=27)  //For debug pci interrupt
 //	printf("[%s:%d]----------------------------------------------> int_id=%d\n",__func__,__LINE__,int_id);

@@ -48,6 +48,7 @@
 .endm
 
 .macro call_common_trap_handler
+	// All IRQ vectors funnel into C dispatcher for timer tick / 將所有 IRQ 集中轉交給 C 層處理系統節拍
 	bl common_irq_trap_handler
 .endm
 
