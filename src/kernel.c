@@ -3,17 +3,15 @@
 #include "pl011.h"
 #include "pl050.h"
 #include "pl111.h"
-#include "sp804.h"
 #include "interrupt.h"
 
 #if 1
 int tick_init(void){
- 	interrupt_init();
+	interrupt_init();
 	//clcd_init();
- //	kb_init();
- 	timer_init();
+//	kb_init();
 /*
- 	UG_FillCircle(100, 100, 30, C_YELLOW);
+	UG_FillCircle(100, 100, 30, C_YELLOW);
  	UG_FillCircle(200, 100, 10, C_RED);
  	UG_FillCircle(250, 100, 10, C_BLUE);
  	UG_FillCircle(350, 100, 20, C_GREEN);

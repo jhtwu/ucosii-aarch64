@@ -1,9 +1,9 @@
 # Timer Interrupt Flow / 計時器中斷流程
 
 ## Overview / 概覽
-This project uses the ARMv8 virtual timer to generate the periodic OS tick for µC/OS-II. The firmware programs the EL1 generic timer, routes the interrupt through the GIC, and services it in `BSP_OS_TmrTickHandler()` to drive `OSTimeTick()`. The older SP804 timer helper remains in the tree but is not part of the active tick pipeline.
+This project uses the ARMv8 virtual timer to generate the periodic OS tick for µC/OS-II. The firmware programs the EL1 generic timer, routes the interrupt through the GIC, and services it in `BSP_OS_TmrTickHandler()` to drive `OSTimeTick()`.
 
-本專案利用 ARMv8 虛擬計時器產生 µC/OS-II 的週期性系統時脈。韌體會設定 EL1 Generic Timer，透過 GIC 導向中斷，並在 `BSP_OS_TmrTickHandler()` 內呼叫 `OSTimeTick()`，帶動作業系統排程。原本的 SP804 計時器仍在原始碼中，但已不再是主要的系統時脈來源。
+本專案利用 ARMv8 虛擬計時器產生 µC/OS-II 的週期性系統時脈。韌體會設定 EL1 Generic Timer，透過 GIC 導向中斷，並在 `BSP_OS_TmrTickHandler()` 內呼叫 `OSTimeTick()`，帶動作業系統排程。
 
 ## Related Source Files / 相關程式檔案
 - `src/app.c` – Calls `BSP_OS_TmrTickInit()` once multitasking is ready. / 在多工啟動後呼叫 `BSP_OS_TmrTickInit()`。
@@ -13,7 +13,6 @@ This project uses the ARMv8 virtual timer to generate the periodic OS tick for �
 - `src/exception.c` – Routes the EL1 IRQ vector to `BSP_IntHandler()`. / 將 EL1 IRQ 例外導向 `BSP_IntHandler()`。
 - `src/os_cpu_a_vfp-none_a57.S`, `src/vector_cortex-a57.S` – Assembly vectors that branch into the shared C IRQ handler. / 組語向量程式，跳入共用的 C 語言 IRQ 處理流程。
 - `src/interrupt.c` – Legacy bare-metal IRQ path (kept for reference). / 保留供參考的舊式裸機 IRQ 處理程式。
-- `src/sp804.c` / `src/sp804.h` – Legacy SP804 timer helper; no longer part of the active tick chain. / 舊版 SP804 計時器輔助程式，未參與目前的 Tick 流程。
 
 ## Execution Flow / 執行流程
 1. **Application boot / 應用程式啟動**  
@@ -29,16 +28,16 @@ This project uses the ARMv8 virtual timer to generate the periodic OS tick for �
    計時器逾時後，GIC 對 CPU 發出 IRQ。`vector_cortex-a57.S` 與 `os_cpu_a_vfp-none_a57.S` 的向量程式會跳到 `common_irq_trap_handler()`，該函式隨即呼叫 `BSP_IntHandler()` 以確認並分派中斷。
 
 4. **Handler execution / 中斷服務程式**  
-   `BSP_IntHandler()` looks up the registered ISR (`BSP_OS_TmrTickHandler()`), calls it, then writes EOIR to complete the IRQ. `BSP_OS_TmrTickHandler()` clears the private timer status, invokes `OSTimeTick()`, masks any pending status bit, and reprograms the virtual timer for the next tick via `cp15_virt_timer_init()`.  
-   `BSP_IntHandler()` 查表取得先前註冊的 ISR（即 `BSP_OS_TmrTickHandler()`），執行完後寫入 EOIR 結束 IRQ；`BSP_OS_TmrTickHandler()` 會清除私有計時器狀態、呼叫 `OSTimeTick()` 更新系統節拍、處理剩餘的狀態位元，並透過 `cp15_virt_timer_init()` 重新載入下一個 Tick。
+`BSP_IntHandler()` looks up the registered ISR (`BSP_OS_TmrTickHandler()`), calls it, then writes EOIR to complete the IRQ. `BSP_OS_TmrTickHandler()` invokes `OSTimeTick()`, manages the virtual timer control bits, and reprograms the next deadline via `cp15_virt_timer_init()`.  
+`BSP_IntHandler()` 查表取得先前註冊的 ISR（即 `BSP_OS_TmrTickHandler()`），執行完後寫入 EOIR 結束 IRQ；`BSP_OS_TmrTickHandler()` 會呼叫 `OSTimeTick()` 更新系統節拍、處理虛擬計時器控制位元，並透過 `cp15_virt_timer_init()` 安排下一次 Tick。
 
 5. **OS scheduling / 作業系統排程**  
    `OSTimeTick()` updates the µC/OS-II kernel tick count and wakes any time-delayed tasks, enabling standard scheduling.  
    `OSTimeTick()` 會更新 µC/OS-II 的時脈計數並喚醒所有等待逾時的任務，驅動正常的排程行為。
 
 ## Legacy Components / 傳統元件
-- `sp804.c` still offers an interrupt-capable timer (SP804 dual timer). The current firmware no longer ties it to the scheduler, but the helper illustrates how to register an alternate timer source (`install_isr(TIM01INT_IRQn, timer_handler)`).  
-  `sp804.c` 仍保留具備中斷功能的 SP804 計時器，雖未與排程器連結，但提供另一種計時來源的範例 (`install_isr(TIM01INT_IRQn, timer_handler)`)。
+- The previous SP804 helper module has been removed; virtual timer is now the sole tick source.  
+  過去的 SP804 輔助模組已移除，目前僅保留虛擬計時器做為系統時脈。
 
 - `interrupt.c` provides an attribute-based bare-metal IRQ handler used before the µC/OS-II port. The µC/OS-II path now goes through `BSP_IntHandler()` instead.  
   `interrupt.c` 為早期裸機架構所使用的 IRQ 處理器，現行 µC/OS-II 流程改由 `BSP_IntHandler()` 管理。
@@ -47,4 +46,3 @@ This project uses the ARMv8 virtual timer to generate the periodic OS tick for �
 - The virtual timer interval (`cntv_tval_el0`) is currently fixed at `0x96000` (614 000 decimal) in `cp15_virt_timer_init()`. Adjust the value to change the tick frequency. / `cp15_virt_timer_init()` 目前將虛擬計時器間隔設為 `0x96000` (十進位 614 000)，可依需求調整以修改 Tick 頻率。
 - Remember to keep the timer initialization after the OS start, otherwise the handler may fire before tasks exist. / 請務必在作業系統啟動後再初始化計時器，避免中斷在任務尚未建立時就觸發。
 - If you replace the timer source (e.g., use SP804), replicate the registration flow: initialize hardware, register ISR with `BSP_IntVectSet()`, enable the IRQ, and call `OSTimeTick()` inside the handler. / 若改用其他計時器（如 SP804），請複製同樣的註冊流程：初始化硬體、以 `BSP_IntVectSet()` 註冊 ISR、開啟 IRQ，並在中斷服務程式內呼叫 `OSTimeTick()`。
-

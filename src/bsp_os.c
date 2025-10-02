@@ -56,18 +56,7 @@
 *********************************************************************************************************
 */
 
-#define  ARM_PTMR_REG_PTLR     (*((CPU_REG32 *)(ARM_PRIV_PERIPH_BASE + 0x0600))) /* Private timer load register.        */
-#define  ARM_PTMR_REG_PTCTRR   (*((CPU_REG32 *)(ARM_PRIV_PERIPH_BASE + 0x0604))) /* Private timer counter register.     */
-#define  ARM_PTMR_REG_PTCTLR   (*((CPU_REG32 *)(ARM_PRIV_PERIPH_BASE + 0x0608))) /* Private timer control register.     */
-#define  ARM_PTMR_REG_PTISR    (*((CPU_REG32 *)(ARM_PRIV_PERIPH_BASE + 0x060C))) /* Private timer interrupt status register.*/
-
-
 /*
-*********************************************************************************************************
-*                                      BSP_OS_SemCreate()
-*
-* Description : Creates a sempahore to lock/unlock
-*
 * Argument(s) : p_sem        Pointer to a BSP_OS_SEM structure
 *
 *               sem_val      Initial value of the semaphore.
@@ -305,45 +294,18 @@ void cp15_virt_timer_init()
 
 void  BSP_OS_TmrTickHandler(CPU_INT32U cpu_id)
 {
-    ARM_PTMR_REG_PTISR = 0x01u;                                 /* Clear the interrupt / 清除私有計時器中斷旗標 */
-	static int i=0;
-#if 1 //def TASK_DBG
-	i++;
-	if(i%100==0){
-		uart_puts("\nBSP_OS_TmrTickHandler, OSIntNesting=");
-		uart_puthex(OSIntNesting);
-	}
-#endif
+    (void)cpu_id;
+
     OSTimeTick();                                              /* Drive µC/OS-II scheduler / 推進 µC/OS-II 排程器 */
 	unsigned int ctrl;
 	ctrl = arch_timer_reg_read_cp15(ARCH_TIMER_VIRT_ACCESS,ARCH_TIMER_REG_CTRL);
 		
-//	uart_puthex(ctrl);
     if (ctrl & ARCH_TIMER_CTRL_IT_STAT) {
         ctrl |= ARCH_TIMER_CTRL_IT_MASK;
 		arch_timer_reg_write_cp15(ARCH_TIMER_VIRT_ACCESS,ARCH_TIMER_REG_CTRL,ctrl);
 	}
 
 	cp15_virt_timer_init();                                      /* Re-arm virtual timer / 重新啟動虛擬計時器 */
-/*
-	int val=0x2;
-	asm volatile("msr cntkctl_el1,%x0" : : "rZ" (val));
-
-	val=0xd6;
-	asm volatile("msr cntkctl_el1,%x0" : : "rZ" (val));
-*/
-#if 0 //Linux's method  drivers/clocksource/arm_arch_timer.c. function timer_handler
-    unsigned long ctrl;
-
-    ctrl = arch_timer_reg_read(access, ARCH_TIMER_REG_CTRL, evt);
-    if (ctrl & ARCH_TIMER_CTRL_IT_STAT) {
-        ctrl |= ARCH_TIMER_CTRL_IT_MASK;
-        arch_timer_reg_write(access, ARCH_TIMER_REG_CTRL, ctrl, evt);
-        evt->event_handler(evt);
-        return IRQ_HANDLED;
-    }
-
-#endif
 }
 
 
