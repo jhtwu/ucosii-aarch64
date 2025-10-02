@@ -20,16 +20,16 @@ This project uses the ARMv8 virtual timer to generate the periodic OS tick for �
    `AppTaskStart()` 於建構完成各任務後才呼叫 `BSP_OS_TmrTickInit(1000)`，確保系統時脈在 µC/OS-II 運作時才啟用。
 
 2. **Timer setup / 計時器設定**  
-   `BSP_OS_TmrTickInit()` programs EL1 timer access (`cntkctl_el1`), calls `cp15_virt_timer_init()` to set the virtual timer period, registers `BSP_OS_TmrTickHandler()` as interrupt vector 27 (virtual timer IRQ), and enables the IRQ line.  
-   `BSP_OS_TmrTickInit()` 會設定 `cntkctl_el1` 讓 EL1 可使用計時器，呼叫 `cp15_virt_timer_init()` 寫入虛擬計時器週期，將 `BSP_OS_TmrTickHandler()` 掛到 GIC 中的向量 27（虛擬計時器 IRQ），並開啟該中斷。
+   `BSP_OS_TmrTickInit()` programs EL1 timer access (`cntkctl_el1`), derives the reload value from `CNTFRQ_EL0` with a prescale factor (default 10:1 to match legacy timing), writes it to `CNTV_TVAL_EL0`, registers `BSP_OS_TmrTickHandler()` as interrupt vector 27 (virtual timer IRQ), and enables the IRQ line.  
+   `BSP_OS_TmrTickInit()` 會設定 `cntkctl_el1` 讓 EL1 可使用計時器、依據 `CNTFRQ_EL0` 及預設 10:1 的 prescale 計算重載值並寫入 `CNTV_TVAL_EL0`，再將 `BSP_OS_TmrTickHandler()` 掛到 GIC 的向量 27（虛擬計時器 IRQ），並開啟該中斷。
 
 3. **GIC dispatch / GIC 分派**  
    When the timer expires, the GIC signals the CPU. The exception vectors in `vector_cortex-a57.S`/`os_cpu_a_vfp-none_a57.S` branch to `common_irq_trap_handler()` (C), which immediately calls `BSP_IntHandler()` to acknowledge and dispatch the interrupt.  
    計時器逾時後，GIC 對 CPU 發出 IRQ。`vector_cortex-a57.S` 與 `os_cpu_a_vfp-none_a57.S` 的向量程式會跳到 `common_irq_trap_handler()`，該函式隨即呼叫 `BSP_IntHandler()` 以確認並分派中斷。
 
 4. **Handler execution / 中斷服務程式**  
-`BSP_IntHandler()` looks up the registered ISR (`BSP_OS_TmrTickHandler()`), calls it, then writes EOIR to complete the IRQ. `BSP_OS_TmrTickHandler()` invokes `OSTimeTick()`, manages the virtual timer control bits, and reprograms the next deadline via `cp15_virt_timer_init()`.  
-`BSP_IntHandler()` 查表取得先前註冊的 ISR（即 `BSP_OS_TmrTickHandler()`），執行完後寫入 EOIR 結束 IRQ；`BSP_OS_TmrTickHandler()` 會呼叫 `OSTimeTick()` 更新系統節拍、處理虛擬計時器控制位元，並透過 `cp15_virt_timer_init()` 安排下一次 Tick。
+`BSP_IntHandler()` looks up the registered ISR (`BSP_OS_TmrTickHandler()`), calls it, then writes EOIR to complete the IRQ. `BSP_OS_TmrTickHandler()` immediately reloads `CNTV_TVAL_EL0` for the next deadline before calling `OSTimeTick()`.  
+`BSP_IntHandler()` 查表取得先前註冊的 ISR（即 `BSP_OS_TmrTickHandler()`），執行完後寫入 EOIR 結束 IRQ；`BSP_OS_TmrTickHandler()` 先重載 `CNTV_TVAL_EL0` 安排下一個節拍，再呼叫 `OSTimeTick()` 更新系統排程。
 
 5. **OS scheduling / 作業系統排程**  
    `OSTimeTick()` updates the µC/OS-II kernel tick count and wakes any time-delayed tasks, enabling standard scheduling.  

@@ -47,6 +47,7 @@
 #include  <bsp_os.h>
 #include  <bsp_int.h>
 #include  <includes.h>
+#include  <aarch64.h>
 
 
 
@@ -266,15 +267,19 @@ unsigned int arch_timer_reg_read_cp15(int access, enum arch_timer_reg reg)
 }
 
 
-void cp15_virt_timer_init()
+static CPU_INT32U BSP_OS_TmrReload;
+
+#ifndef BSP_OS_TMR_PRESCALE
+#define BSP_OS_TMR_PRESCALE                10u   /* Default prescale (tick_rate / 10) / 預設以 10:1 降低節拍頻率 */
+#endif
+
+static inline void BSP_OS_VirtTimerReload(void)
 {
-	// Program EL1 virtual timer for the next OS tick / 設定 EL1 虛擬計時器以安排下一個系統節拍
-//	uart_puts("cp15_virt_timer_init\n");
-	arch_timer_reg_write_cp15(ARCH_TIMER_VIRT_ACCESS,0,7);
-	arch_timer_reg_write_cp15(ARCH_TIMER_VIRT_ACCESS,1,614000);
-	//arch_timer_reg_write_cp15(ARCH_TIMER_VIRT_ACCESS,1,1250000);
-	//arch_timer_reg_write_cp15(ARCH_TIMER_VIRT_ACCESS,1,1000); //TODO: Ruby which value to set?
-	arch_timer_reg_write_cp15(ARCH_TIMER_VIRT_ACCESS,0,5);
+    CPU_INT32U reload = BSP_OS_TmrReload;      /* Cached reload interval / 快取的重載週期 */
+
+    if (reload != 0u) {
+        __asm__ volatile("msr cntv_tval_el0, %0" :: "rZ" (reload));
+    }
 }
 /*
 *********************************************************************************************************
@@ -296,16 +301,8 @@ void  BSP_OS_TmrTickHandler(CPU_INT32U cpu_id)
 {
     (void)cpu_id;
 
+    BSP_OS_VirtTimerReload();                                  /* Program next tick / 設定下一個節拍 */
     OSTimeTick();                                              /* Drive µC/OS-II scheduler / 推進 µC/OS-II 排程器 */
-	unsigned int ctrl;
-	ctrl = arch_timer_reg_read_cp15(ARCH_TIMER_VIRT_ACCESS,ARCH_TIMER_REG_CTRL);
-		
-    if (ctrl & ARCH_TIMER_CTRL_IT_STAT) {
-        ctrl |= ARCH_TIMER_CTRL_IT_MASK;
-		arch_timer_reg_write_cp15(ARCH_TIMER_VIRT_ACCESS,ARCH_TIMER_REG_CTRL,ctrl);
-	}
-
-	cp15_virt_timer_init();                                      /* Re-arm virtual timer / 重新啟動虛擬計時器 */
 }
 
 
@@ -337,7 +334,24 @@ void BSP_OS_TmrTickInit(CPU_INT32U tick_rate)
 
 	val=0xd6;
 	asm volatile("msr cntkctl_el1,%x0" : : "rZ" (val));
-	cp15_virt_timer_init();
+
+	if (tick_rate == 0u) {
+		tick_rate = OS_TICKS_PER_SEC;
+	}
+
+	CPU_INT32U cnt_freq = raw_read_cntfrq_el0();                 /* System counter frequency / 系統計數器頻率 */
+	CPU_INT32U eff_rate = tick_rate / BSP_OS_TMR_PRESCALE;       /* Apply prescale to match legacy timing / 套用預設降頻以符合原本節奏 */
+	if (eff_rate == 0u) {
+		eff_rate = 1u;
+	}
+	CPU_INT32U reload = cnt_freq / eff_rate;                     /* Reload value for CNTV_TVAL_EL0 / CNTV_TVAL_EL0 的重載值 */
+	if (reload == 0u) {
+		reload = 1u;
+	}
+
+	BSP_OS_TmrReload = reload;                                   /* Save for fast IRQ use / 保存供 IRQ 快速重載 */
+	arch_timer_reg_write_cp15(ARCH_TIMER_VIRT_ACCESS, ARCH_TIMER_REG_CTRL, ARCH_TIMER_CTRL_ENABLE);
+	BSP_OS_VirtTimerReload();
 
 #if 1
     BSP_IntVectSet (27u,
