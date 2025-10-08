@@ -1,5 +1,6 @@
 
 #include "smc911x.h"
+#include "virtio_net.h"
 #include <net.h>
 
 static struct eth_device *eth_devices;
@@ -31,7 +32,8 @@ int eth_register(struct eth_device *dev)
 	return 0;
 }
 
-void net_process_received_packet(uchar *in_packet, int len)
+/* Moved to net_protocol.c */
+void net_process_received_packet_old(uchar *in_packet, int len)
 {
 #if 0
 	struct ethernet_hdr *et;
@@ -286,9 +288,17 @@ void net_process_received_packet(uchar *in_packet, int len)
 
 int eth_init()
 {
-	int rc;  
+	int rc;
 	printf("[%s:%d]\n",__func__,__LINE__);
+
+#ifdef CONFIG_VIRTIO_NET
+	/* Use VirtIO Net for ARM virt machine */
+	printf("Initializing VirtIO Net driver...\n");
+	rc = virtio_net_initialize(CONFIG_VIRTIO_NET_BASE, CONFIG_VIRTIO_NET_IRQ);
+#else
+	/* Use SMC911x for other platforms */
 	rc = smc911x_initialize(0, CONFIG_SMC911X_BASE);
-	
+#endif
+
 	return rc;
 }

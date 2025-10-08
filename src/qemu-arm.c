@@ -58,7 +58,8 @@ static struct mm_region qemu_arm64_mem_map[] = {
 		.size = 0x38000000,
 		.attrs = PTE_BLOCK_MEMTYPE(MT_DEVICE_NGNRNE) |
 			 PTE_BLOCK_NON_SHARE |
-			 PTE_BLOCK_PXN | PTE_BLOCK_UXN
+			 PTE_BLOCK_PXN | PTE_BLOCK_UXN |
+			 PTE_BLOCK_AP_RW_EL1 | PTE_BLOCK_AF
 	}, {
 		/* RAM */
 		.virt = 0x40000000ULL,
@@ -73,7 +74,7 @@ static struct mm_region qemu_arm64_mem_map[] = {
 		.size = 0x10000000,
 		.attrs = PTE_BLOCK_MEMTYPE(MT_DEVICE_NGNRNE) |
 			 PTE_BLOCK_NON_SHARE |
-			 PTE_BLOCK_PXN | PTE_BLOCK_UXN
+			 PTE_BLOCK_PXN | PTE_BLOCK_UXN | PTE_BLOCK_AF
 	}, {
 		/* Highmem PCI-E MMIO memory area */
 		.virt = 0x8000000000ULL,
@@ -81,7 +82,7 @@ static struct mm_region qemu_arm64_mem_map[] = {
 		.size = 0x8000000000ULL,
 		.attrs = PTE_BLOCK_MEMTYPE(MT_DEVICE_NGNRNE) |
 			 PTE_BLOCK_NON_SHARE |
-			 PTE_BLOCK_PXN | PTE_BLOCK_UXN
+			 PTE_BLOCK_PXN | PTE_BLOCK_UXN | PTE_BLOCK_AF
 	}, {
 		/* List terminator */
 		0,

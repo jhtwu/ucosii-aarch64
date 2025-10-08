@@ -81,6 +81,10 @@
 #define PTE_BLOCK_INNER_SHARE	(3 << 8)
 #define PTE_BLOCK_AF		(1 << 10)
 #define PTE_BLOCK_NG		(1 << 11)
+#define PTE_BLOCK_AP_RW_EL1	(0x0 << 6)  /* Read/Write at EL1, No access at EL0 */
+#define PTE_BLOCK_AP_RW_ALL	(0x1 << 6)  /* Read/Write at all ELs */
+#define PTE_BLOCK_AP_RO_EL1	(0x2 << 6)  /* Read-only at EL1, No access at EL0 */
+#define PTE_BLOCK_AP_RO_ALL	(0x3 << 6)  /* Read-only at all ELs */
 #define PTE_BLOCK_PXN		(ULL(1) << 53)
 #define PTE_BLOCK_UXN		(ULL(1) << 54)
 

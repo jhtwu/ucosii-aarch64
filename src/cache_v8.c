@@ -248,7 +248,7 @@ static void add_map(struct mm_region *map)
 
 	// printf("sizeof(u64)=%ld\n",sizeof(u64));
 
-//	printf("----------> phys=0x%llx,\tvirt=0x%llx,\tsize=0x%llx,attrs=0x%llx\n",phys,virt,size,attrs);
+	printf("----------> phys=0x%llx,\tvirt=0x%llx,\tsize=0x%llx,attrs=0x%llx\n",phys,virt,size,attrs);
 
 	while (size) {
 		pte = find_pte(virt, 0);
