@@ -127,7 +127,10 @@ int BSP_OS_VirtioNetHandler(unsigned int cpu_id)
     virtio_mmio_write(virtio_net_device, VIRTIO_MMIO_INTERRUPT_ACK, int_status);
 
     if (int_status & 0x1) {  /* Used buffer notification */
-        /* Process received packets */
+        /* Lazy cleanup of TX completions (amortized cost) */
+        virtio_net_device->tx_last_used = virtio_net_device->tx_used->idx;
+
+        /* Process received packets in normal path */
         virtio_net_rx(&virtio_net_device->eth_dev);
     }
 
@@ -328,9 +331,18 @@ int virtio_net_send(struct eth_device *eth_dev, void *packet, int length)
     struct virtio_net_hdr *hdr;
     u8 *buf;
     u16 desc_idx;
-    int timeout = 1000;
+    u16 available_slots;
 
-    printf("[%s] Sending packet, length=%d\n", DRIVERNAME, length);
+    /* Lazy cleanup of completed TX descriptors */
+    dev->tx_last_used = dev->tx_used->idx;
+
+    /* Check available TX descriptors */
+    available_slots = VIRTIO_NET_QUEUE_SIZE -
+                     (dev->tx_avail->idx - dev->tx_last_used);
+
+    if (available_slots == 0) {
+        return -1;
+    }
 
     /* Get next available TX buffer */
     desc_idx = dev->tx_avail->idx % VIRTIO_NET_QUEUE_SIZE;
@@ -356,19 +368,7 @@ int virtio_net_send(struct eth_device *eth_dev, void *packet, int length)
     /* Notify device */
     virtio_mmio_write(dev, VIRTIO_MMIO_QUEUE_NOTIFY, VIRTIO_NET_TX_QUEUE);
 
-    /* Wait for transmission (check used ring) */
-    while (dev->tx_used->idx == dev->tx_last_used && timeout-- > 0) {
-        udelay(10);
-    }
-
-    if (timeout <= 0) {
-        printf(DRIVERNAME ": TX timeout\n");
-        return -1;
-    }
-
-    dev->tx_last_used = dev->tx_used->idx;
-
-    printf("[%s] Packet sent successfully\n", DRIVERNAME);
+    /* Fire-and-forget: no waiting for completion! */
     return 0;
 }
 
@@ -387,7 +387,6 @@ int virtio_net_rx(struct eth_device *eth_dev)
         elem = &dev->rx_used->ring[last_used % VIRTIO_NET_QUEUE_SIZE];
 
         if (elem->len < sizeof(struct virtio_net_hdr)) {
-            printf(DRIVERNAME ": Received packet too small\n");
             last_used++;
             continue;
         }
@@ -395,8 +394,6 @@ int virtio_net_rx(struct eth_device *eth_dev)
         hdr = (struct virtio_net_hdr *)dev->rx_buffers[elem->id];
         pkt = (u8 *)hdr + sizeof(struct virtio_net_hdr);
         pktlen = elem->len - sizeof(struct virtio_net_hdr);
-
-        printf(DRIVERNAME ": RX packet, len=%d\n", pktlen);
 
         /* Process packet */
         if (pktlen > 0 && pktlen <= PKTSIZE_ALIGN) {

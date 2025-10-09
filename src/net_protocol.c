@@ -83,12 +83,8 @@ static void handle_arp(u8 *pkt, int len)
 
     if (target_ip[0] != GUEST_IP_BYTE0 || target_ip[1] != GUEST_IP_BYTE1 ||
         target_ip[2] != GUEST_IP_BYTE2 || target_ip[3] != GUEST_IP_BYTE3) {
-        printf("ARP: Not for us (target: %d.%d.%d.%d)\n",
-               target_ip[0], target_ip[1], target_ip[2], target_ip[3]);
         return;
     }
-
-    printf("ARP: Request for our IP, sending reply\n");
 
     /* Build ARP reply */
     memset(reply, 0, sizeof(reply));
@@ -149,9 +145,6 @@ static void handle_icmp(u8 *pkt, int len)
         ((dest_ip >> 8) & 0xff) != GUEST_IP_BYTE2 || (dest_ip & 0xff) != GUEST_IP_BYTE3) {
         return;
     }
-
-    printf("ICMP: Echo request, sending reply (id=%d, seq=%d)\n",
-           ntohs(icmp->un.echo.id), ntohs(icmp->un.echo.sequence));
 
     payload = (u8 *)icmp + 8;
     payload_len = icmp_len - 8;
@@ -214,7 +207,6 @@ void net_process_received_packet(uchar *pkt, int len)
 
     switch (ethertype) {
         case 0x0806:  /* ARP */
-            printf("RX: ARP packet\n");
             handle_arp(pkt, len);
             break;
 
@@ -223,10 +215,7 @@ void net_process_received_packet(uchar *pkt, int len)
                 struct ip_hdr *ip = (struct ip_hdr *)(pkt + sizeof(struct eth_hdr));
                 if (len >= sizeof(struct eth_hdr) + IP_HDR_SIZE) {
                     if (ip->ip_p == 1) {  /* ICMP */
-                        printf("RX: ICMP packet\n");
                         handle_icmp(pkt, len);
-                    } else {
-                        printf("RX: IPv4 packet (protocol %d)\n", ip->ip_p);
                     }
                 }
             }
@@ -237,7 +226,6 @@ void net_process_received_packet(uchar *pkt, int len)
             break;
 
         default:
-            printf("RX: Unknown ethertype 0x%04x\n", ethertype);
             break;
     }
 }
