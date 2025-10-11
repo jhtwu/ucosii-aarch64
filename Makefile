@@ -212,10 +212,18 @@ test-ping: $(TEST_PING_BIN)
 	@echo "========================================="
 	if ! ip link show $(QEMU_BRIDGE_TAP) >/dev/null 2>&1; then \
 		echo "[SKIP] TAP interface '$(QEMU_BRIDGE_TAP)' not available"; \
+		echo "      Create it with: sudo ip tuntap add dev $(QEMU_BRIDGE_TAP) mode tap user $$USER"; \
 		exit 0; \
 	fi; \
 	status=0; \
 	output=$$(timeout --foreground 20s $(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) $(QEMU_BRIDGE_FLAGS) -kernel $(TEST_PING_BIN) 2>&1) || status=$$?; \
+	if echo "$$output" | grep -q "Could not set up host tap"; then \
+		echo "[FAIL] Unable to access TAP interface '$(QEMU_BRIDGE_TAP)'"; \
+		echo "      Ensure it exists and is owned by $$USER:"; \
+		echo "      sudo ip tuntap add dev $(QEMU_BRIDGE_TAP) mode tap user $$USER"; \
+		echo "      sudo ip link set $(QEMU_BRIDGE_TAP) up"; \
+		exit 1; \
+	fi; \
 	echo "$$output"; \
 	if echo "$$output" | grep -q "\[PASS\]"; then \
 		echo ""; echo "✓ TEST PASSED"; exit 0; \
