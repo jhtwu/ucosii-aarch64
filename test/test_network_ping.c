@@ -9,6 +9,8 @@
 #include <stdbool.h>
 #include <string.h>
 
+#include "test_support.h"
+
 #define NET_TASK_PRIO    5u
 #define NET_STACK_SIZE   4096u
 
@@ -38,66 +40,6 @@ static volatile INT64U ping_response_cycles = 0;
 
 extern struct eth_device *ethdev;
 extern struct virtio_net_dev *virtio_net_device;
-
-static INT16U checksum16(const void *data, size_t length)
-{
-    const INT8U *bytes = (const INT8U *)data;
-    INT32U sum = 0u;
-
-    while (length > 1u) {
-        sum += (INT32U)(((INT32U)bytes[0] << 8) | bytes[1]);
-        bytes += 2u;
-        length -= 2u;
-    }
-
-    if (length == 1u) {
-        sum += (INT32U)bytes[0] << 8;
-    }
-
-    while ((sum >> 16u) != 0u) {
-        sum = (sum & 0xFFFFu) + (sum >> 16u);
-    }
-
-    return (INT16U)(~sum);
-}
-
-static inline void store_be16(INT8U *dst, INT16U value)
-{
-    dst[0] = (INT8U)(value >> 8);
-    dst[1] = (INT8U)(value & 0xFFu);
-}
-
-static inline INT64U read_cntvct(void)
-{
-    INT64U val;
-    __asm__ volatile("mrs %0, cntvct_el0" : "=r"(val));
-    return val;
-}
-
-static INT32U cycles_to_us(INT64U cycles)
-{
-    static INT64U freq = 0u;
-
-    if (freq == 0u) {
-        __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(freq));
-        if (freq == 0u) {
-            freq = 1u;
-        }
-    }
-
-    __uint128_t numerator = (__uint128_t)cycles * 1000000u + ((__uint128_t)freq / 2u);
-    return (INT32U)(numerator / freq);
-}
-
-static bool is_zero_mac(const INT8U mac[6])
-{
-    for (INT32U i = 0; i < 6u; ++i) {
-        if (mac[i] != 0u) {
-            return false;
-        }
-    }
-    return true;
-}
 
 static struct eth_device *select_device(void)
 {
@@ -148,7 +90,7 @@ static void build_icmp_request(INT8U *frame, size_t *length, const INT8U *local_
     ip[0] = 0x45;
     ip[1] = 0x00;
     INT16U total_length = (INT16U)(20u + 8u + PING_PAYLOAD_LEN);
-    store_be16(&ip[2], total_length);
+    test_store_be16(&ip[2], total_length);
     ip[4] = 0x00;
     ip[5] = 0x00;
     ip[6] = 0x00;
@@ -159,21 +101,21 @@ static void build_icmp_request(INT8U *frame, size_t *length, const INT8U *local_
     ip[11] = 0;
     ip[12] = GUEST_IP0; ip[13] = GUEST_IP1; ip[14] = GUEST_IP2; ip[15] = GUEST_IP3;
     ip[16] = HOST_IP0; ip[17] = HOST_IP1; ip[18] = HOST_IP2; ip[19] = HOST_IP3;
-    INT16U ip_sum = checksum16(ip, 20u);
-    store_be16(&ip[10], ip_sum);
+    INT16U ip_sum = test_checksum16(ip, 20u);
+    test_store_be16(&ip[10], ip_sum);
 
     icmp[0] = 8u;
     icmp[1] = 0u;
     icmp[2] = 0u;
     icmp[3] = 0u;
-    store_be16(&icmp[4], PING_IDENTIFIER);
-    store_be16(&icmp[6], sequence);
+    test_store_be16(&icmp[4], PING_IDENTIFIER);
+    test_store_be16(&icmp[6], sequence);
     for (INT32U i = 0; i < PING_PAYLOAD_LEN; ++i) {
         payload[i] = (INT8U)(0x30u + (i & 0x0Fu));
     }
 
-    INT16U icmp_sum = checksum16(icmp, 8u + PING_PAYLOAD_LEN);
-    store_be16(&icmp[2], icmp_sum);
+    INT16U icmp_sum = test_checksum16(icmp, 8u + PING_PAYLOAD_LEN);
+    test_store_be16(&icmp[2], icmp_sum);
 
     *length = 14u + total_length;
 }
@@ -197,7 +139,7 @@ void test_net_on_frame(INT8U *pkt, int len)
             !arp_completed) {
             memcpy(host_mac, &pkt[22], 6u);
             arp_completed = true;
-            arp_response_cycles = read_cntvct();
+            arp_response_cycles = test_timer_read_cycles();
         }
         return;
     }
@@ -219,7 +161,7 @@ void test_net_on_frame(INT8U *pkt, int len)
                 if (!ping_completed && seq == ping_sequence_issued) {
                     ping_completed = true;
                     ping_sequence_observed = seq;
-                    ping_response_cycles = read_cntvct();
+                    ping_response_cycles = test_timer_read_cycles();
                 }
             }
         }
@@ -260,7 +202,7 @@ static void net_test_task(void *p_arg)
     size_t frame_len = 0u;
     build_arp_request(frame, &frame_len, local_mac);
 
-    INT64U arp_start_cycles = read_cntvct();
+    INT64U arp_start_cycles = test_timer_read_cycles();
     dev->send(dev, frame, (int)frame_len);
 
     for (INT32U waited = 0; waited < 2000u && !arp_completed; waited += 10u) {
@@ -273,12 +215,12 @@ static void net_test_task(void *p_arg)
         goto wait_forever;
     }
 
-    if (is_zero_mac(host_mac)) {
+    if (test_mac_is_zero(host_mac)) {
         printf("[FAIL] ARP response contained invalid MAC\n");
         goto wait_forever;
     }
 
-    INT32U arp_latency_us = cycles_to_us(arp_response_cycles - arp_start_cycles);
+    INT32U arp_latency_us = test_cycles_to_us(arp_start_cycles, arp_response_cycles);
 
     INT32U ping_latencies[PING_ITERATIONS];
     INT32U ping_success = 0u;
@@ -290,7 +232,7 @@ static void net_test_task(void *p_arg)
         ++ping_sequence_issued;
 
         build_icmp_request(frame, &frame_len, local_mac, ping_sequence_issued);
-        INT64U ping_start_cycles = read_cntvct();
+        INT64U ping_start_cycles = test_timer_read_cycles();
         dev->send(dev, frame, (int)frame_len);
 
         for (INT32U waited = 0; waited < 2000u; waited += 10u) {
@@ -299,7 +241,7 @@ static void net_test_task(void *p_arg)
                 ping_sequence_observed == ping_sequence_issued &&
                 ping_response_cycles != 0u) {
                 ping_latencies[ping_success++] =
-                    cycles_to_us(ping_response_cycles - ping_start_cycles);
+                    test_cycles_to_us(ping_start_cycles, ping_response_cycles);
                 break;
             }
             OSTimeDlyHMSM(0u, 0u, 0u, 10u);

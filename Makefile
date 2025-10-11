@@ -68,13 +68,18 @@ OBJECTS_ALL  := $(OBJECTS_S) $(OBJECTS_C)
 APP_SRC      = $(SRCDIR)/app.c
 APP_OBJECT   = $(OBJDIR)/$(notdir $(APP_SRC:.c=.o))
 CORE_OBJECTS = $(filter-out $(APP_OBJECT), $(OBJECTS_ALL))
-TESTDIR           = test
-TEST_CONTEXT      = $(BINDIR)/test_context_timer.elf
-TEST_PING         = $(BINDIR)/test_network_ping.elf
-TEST_OBJDIR       = test_obj
-TEST_CONTEXT_OBJ  = $(TEST_OBJDIR)/test_context_timer.o
-TEST_PING_OBJ     = $(TEST_OBJDIR)/test_network_ping.o
-TEST_CFLAGS       = $(filter-out -fstack-usage,$(CFLAGS))
+TESTDIR            = test
+TEST_OBJDIR        = test_build
+TEST_SUPPORT       = test_support
+TEST_NAMES         = test_context_timer test_network_ping
+TEST_SUPPORT_OBJ   = $(addprefix $(TEST_OBJDIR)/,$(addsuffix .o,$(TEST_SUPPORT)))
+TEST_PROGRAM_OBJS  = $(addprefix $(TEST_OBJDIR)/,$(addsuffix .o,$(TEST_NAMES)))
+TEST_CONTEXT_NAME  = test_context_timer
+TEST_PING_NAME     = test_network_ping
+TEST_BINDIR        = test_bin
+TEST_CONTEXT_BIN   = $(TEST_BINDIR)/$(TEST_CONTEXT_NAME).elf
+TEST_PING_BIN      = $(TEST_BINDIR)/$(TEST_PING_NAME).elf
+TEST_CFLAGS        = $(filter-out -fstack-usage,$(CFLAGS))
 rm           = rm -f
 
 # ======================================================================================
@@ -114,25 +119,16 @@ $(OBJDIR)/%.o: $(SRCDIR)/%.S
 	@$(AS) $(AFLAGS) $< -o $@
 	@echo "Assembled $< successfully!"
 
-$(TEST_CONTEXT_OBJ): $(TESTDIR)/test_context_timer.c | $(TEST_OBJDIR)
-	@$(CC) $(TEST_CFLAGS) -c $< -o $@
-	@echo "Compiled $< successfully!"
-
-$(TEST_PING_OBJ): $(TESTDIR)/test_network_ping.c | $(TEST_OBJDIR)
+$(TEST_OBJDIR)/%.o: $(TESTDIR)/%.c | $(TEST_OBJDIR)
 	@$(CC) $(TEST_CFLAGS) -c $< -o $@
 	@echo "Compiled $< successfully!"
 
 $(TEST_OBJDIR):
 	@mkdir -p $@
 
-$(TEST_CONTEXT): $(CORE_OBJECTS) $(TEST_CONTEXT_OBJ)
+$(TEST_BINDIR)/test_%.elf: $(CORE_OBJECTS) $(TEST_SUPPORT_OBJ) $(TEST_OBJDIR)/test_%.o
 	@mkdir -p $(@D)
-	@$(LINKER) $@ $(LFLAGS) $(CORE_OBJECTS) $(TEST_CONTEXT_OBJ) -lgcc
-	@echo "Built $@"
-
-$(TEST_PING): $(CORE_OBJECTS) $(TEST_PING_OBJ)
-	@mkdir -p $(@D)
-	@$(LINKER) $@ $(LFLAGS) $(CORE_OBJECTS) $(TEST_PING_OBJ) -lgcc
+	@$(LINKER) $@ $(LFLAGS) $(CORE_OBJECTS) $(TEST_SUPPORT_OBJ) $(TEST_OBJDIR)/test_$*.o -lgcc
 	@echo "Built $@"
 
 # ======================================================================================
@@ -193,12 +189,12 @@ dqemu: $(BINDIR)/$(TARGET)
 
 test: test-context test-ping
 
-test-context: $(TEST_CONTEXT)
+test-context: $(TEST_CONTEXT_BIN)
 	@echo "========================================="
 	@echo "Running Test Case 1: Context Switch & Timer"
 	@echo "========================================="
 	@status=0; \
-	output=$$(timeout --foreground 20s $(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) -kernel $(TEST_CONTEXT) 2>&1) || status=$$?; \
+	output=$$(timeout --foreground 20s $(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) -kernel $(TEST_CONTEXT_BIN) 2>&1) || status=$$?; \
 	echo "$$output"; \
 	if echo "$$output" | grep -q "\[PASS\]"; then \
 		echo ""; echo "✓ TEST PASSED"; exit 0; \
@@ -210,20 +206,16 @@ test-context: $(TEST_CONTEXT)
 		exit $$status; \
 	fi
 
-test-ping: $(TEST_PING)
+test-ping: $(TEST_PING_BIN)
 	@echo "========================================="
 	@echo "Running Test Case 2: Network Ping"
 	@echo "========================================="
-	@if [ "$$(id -u)" -ne 0 ]; then \
-		echo "[SKIP] Requires root privileges for TAP networking"; \
-		exit 0; \
-	fi; \
 	if ! ip link show $(QEMU_BRIDGE_TAP) >/dev/null 2>&1; then \
 		echo "[SKIP] TAP interface '$(QEMU_BRIDGE_TAP)' not available"; \
 		exit 0; \
 	fi; \
 	status=0; \
-	output=$$(timeout --foreground 20s $(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) $(QEMU_BRIDGE_FLAGS) -kernel $(TEST_PING) 2>&1) || status=$$?; \
+	output=$$(timeout --foreground 20s $(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) $(QEMU_BRIDGE_FLAGS) -kernel $(TEST_PING_BIN) 2>&1) || status=$$?; \
 	echo "$$output"; \
 	if echo "$$output" | grep -q "\[PASS\]"; then \
 		echo ""; echo "✓ TEST PASSED"; exit 0; \
@@ -273,6 +265,8 @@ clean:
 	@$(rm) $(OBJECTS_ALL)
 	@$(rm) -rf $(BINDIR)/*
 	@$(rm) -rf $(OBJDIR)
+	@rm -rf $(TEST_OBJDIR)
+	@rm -rf $(TEST_BINDIR)
 	@$(rm) os.list
 	@echo "Cleanup complete!"
 
