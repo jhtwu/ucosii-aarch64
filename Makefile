@@ -71,7 +71,7 @@ CORE_OBJECTS = $(filter-out $(APP_OBJECT), $(OBJECTS_ALL))
 TESTDIR            = test
 TEST_OBJDIR        = test_build
 TEST_SUPPORT       = test_support
-TEST_NAMES         = test_context_timer test_network_ping
+TEST_NAMES         = test_context_timer test_network_ping test_udp_flood
 TEST_SUPPORT_OBJ   = $(addprefix $(TEST_OBJDIR)/,$(addsuffix .o,$(TEST_SUPPORT)))
 TEST_PROGRAM_OBJS  = $(addprefix $(TEST_OBJDIR)/,$(addsuffix .o,$(TEST_NAMES)))
 TEST_CONTEXT_NAME  = test_context_timer
@@ -187,7 +187,7 @@ dqemu: $(BINDIR)/$(TARGET)
 # Utility Targets / 其他常用目標
 # ======================================================================================
 
-test: test-context test-ping
+test: test-context test-ping test-udp
 
 test-context: $(TEST_CONTEXT_BIN)
 	@echo "========================================="
@@ -217,6 +217,47 @@ test-ping: $(TEST_PING_BIN)
 	fi; \
 	status=0; \
 	output=$$(timeout --foreground 20s $(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) $(QEMU_BRIDGE_FLAGS) -kernel $(TEST_PING_BIN) 2>&1) || status=$$?; \
+	if echo "$$output" | grep -qi "could not open /dev/net/tun"; then \
+		echo "[SKIP] Access to /dev/net/tun denied."; \
+		echo "      Options: run 'sudo setcap cap_net_admin+ep $$(command -v $(QEMU))'"; \
+		echo "      or execute this target via sudo."; \
+		exit 0; \
+	fi; \
+	if echo "$$output" | grep -q "Could not set up host tap"; then \
+		echo "[FAIL] Unable to access TAP interface '$(QEMU_BRIDGE_TAP)'"; \
+		echo "      Ensure it exists and is owned by $$USER:"; \
+		echo "      sudo ip tuntap add dev $(QEMU_BRIDGE_TAP) mode tap user $$USER"; \
+		echo "      sudo ip link set $(QEMU_BRIDGE_TAP) up"; \
+		exit 1; \
+	fi; \
+	echo "$$output"; \
+	if echo "$$output" | grep -q "\[PASS\]"; then \
+		echo ""; echo "✓ TEST PASSED"; exit 0; \
+	elif echo "$$output" | grep -q "\[FAIL\]"; then \
+		echo ""; echo "✗ TEST FAILED"; exit 1; \
+	elif [ $$status -eq 124 ]; then \
+		echo ""; echo "⚠ TEST TIMED OUT (no PASS marker)"; exit 1; \
+	else \
+		exit $$status; \
+	fi
+
+test-udp: $(TEST_BINDIR)/test_udp_flood.elf
+	@echo "========================================="
+	@echo "Running Test Case 3: UDP Flood"
+	@echo "========================================="
+	if ! ip link show $(QEMU_BRIDGE_TAP) >/dev/null 2>&1; then \
+		echo "[SKIP] TAP interface '$(QEMU_BRIDGE_TAP)' not available"; \
+		echo "      Create it with: sudo ip tuntap add dev $(QEMU_BRIDGE_TAP) mode tap user $$USER"; \
+		exit 0; \
+	fi; \
+	status=0; \
+	output=$$(timeout --foreground 20s $(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) $(QEMU_BRIDGE_FLAGS) -kernel $(TEST_BINDIR)/test_udp_flood.elf 2>&1) || status=$$?; \
+	if echo "$$output" | grep -qi "could not open /dev/net/tun"; then \
+		echo "[SKIP] Access to /dev/net/tun denied."; \
+		echo "      Options: run 'sudo setcap cap_net_admin+ep $$(command -v $(QEMU))'"; \
+		echo "      or execute this target via sudo."; \
+		exit 0; \
+	fi; \
 	if echo "$$output" | grep -q "Could not set up host tap"; then \
 		echo "[FAIL] Unable to access TAP interface '$(QEMU_BRIDGE_TAP)'"; \
 		echo "      Ensure it exists and is owned by $$USER:"; \

@@ -67,3 +67,10 @@ bool test_mac_is_zero(const uint8_t mac[6])
     }
     return true;
 }
+
+void test_fill_pattern(uint8_t *buf, size_t len, uint8_t seed)
+{
+    for (size_t i = 0; i < len; ++i) {
+        buf[i] = (uint8_t)(seed + (uint8_t)i);
+    }
+}
