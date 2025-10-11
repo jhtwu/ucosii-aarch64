@@ -270,7 +270,7 @@ unsigned int arch_timer_reg_read_cp15(int access, enum arch_timer_reg reg)
 static CPU_INT32U BSP_OS_TmrReload;
 
 #ifndef BSP_OS_TMR_PRESCALE
-#define BSP_OS_TMR_PRESCALE                10u   /* Default prescale (tick_rate / 10) / 預設以 10:1 降低節拍頻率 */
+#define BSP_OS_TMR_PRESCALE                1u    /* Default prescale (no downscale) / 預設為 1 表示不降頻 */
 #endif
 
 static inline void BSP_OS_VirtTimerReload(void)

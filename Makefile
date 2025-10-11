@@ -44,9 +44,16 @@ GDB             = $(TOOLCHAIN)-gdb
 QEMU            = qemu-system-aarch64
 QEMU_IMAGE      = $(BINDIR)/$(TARGET)
 QEMU_BASE_FLAGS = -M virt,gic_version=3 -nographic -serial mon:stdio
-QEMU_SOFT_FLAGS = -cpu $(CORE) -m 384M
+QEMU_RUN_SMP    = 4
+QEMU_RUN_MEMORY = 2048M
+QEMU_SOFT_FLAGS = -cpu $(CORE) -smp $(QEMU_RUN_SMP) -m $(QEMU_RUN_MEMORY) -global virtio-mmio.force-legacy=false
 QEMU_KVM_FLAGS  = -cpu host --enable-kvm -m 256M
 QEMU_GDB_FLAGS  = -gdb tcp::2222 -S
+QEMU_BRIDGE_TAP = qemu-lan
+QEMU_BRIDGE_MAC = 52:54:00:12:34:56
+QEMU_USER_NET_FLAGS = -netdev user,id=net0 -device virtio-net-device,netdev=net0
+QEMU_BRIDGE_FLAGS = -netdev tap,id=net0,ifname=$(QEMU_BRIDGE_TAP),script=no,downscript=no -device virtio-net-device,netdev=net0,bus=virtio-mmio-bus.0,mac=$(QEMU_BRIDGE_MAC)
+NET_MODE ?= bridge
 
 # ======================================================================================
 # Source Discovery / 原始碼蒐集
@@ -58,12 +65,22 @@ AS_FILES     := $(wildcard $(SRCDIR)/*.S)
 OBJECTS_C    := $(addprefix $(OBJDIR)/,$(notdir $(C_FILES:.c=.o)))
 OBJECTS_S    := $(addprefix $(OBJDIR)/,$(notdir $(AS_FILES:.S=.o)))
 OBJECTS_ALL  := $(OBJECTS_S) $(OBJECTS_C)
+APP_SRC      = $(SRCDIR)/app.c
+APP_OBJECT   = $(OBJDIR)/$(notdir $(APP_SRC:.c=.o))
+CORE_OBJECTS = $(filter-out $(APP_OBJECT), $(OBJECTS_ALL))
+TESTDIR           = test
+TEST_CONTEXT      = $(BINDIR)/test_context_timer.elf
+TEST_PING         = $(BINDIR)/test_network_ping.elf
+TEST_OBJDIR       = test_obj
+TEST_CONTEXT_OBJ  = $(TEST_OBJDIR)/test_context_timer.o
+TEST_PING_OBJ     = $(TEST_OBJDIR)/test_network_ping.o
+TEST_CFLAGS       = $(filter-out -fstack-usage,$(CFLAGS))
 rm           = rm -f
 
 # ======================================================================================
 # Phony Targets / 虛擬目標宣告
 # ======================================================================================
-.PHONY: all clean remove run run-kvm qemu qemu_gdb qemu-gdb gdb dqemu setup-network help
+.PHONY: all clean remove run run-kvm qemu qemu_gdb qemu-gdb gdb dqemu setup-network help test test-context test-ping
 
 # ======================================================================================
 # Default Build Target / 預設建置目標
@@ -97,14 +114,55 @@ $(OBJDIR)/%.o: $(SRCDIR)/%.S
 	@$(AS) $(AFLAGS) $< -o $@
 	@echo "Assembled $< successfully!"
 
+$(TEST_CONTEXT_OBJ): $(TESTDIR)/test_context_timer.c | $(TEST_OBJDIR)
+	@$(CC) $(TEST_CFLAGS) -c $< -o $@
+	@echo "Compiled $< successfully!"
+
+$(TEST_PING_OBJ): $(TESTDIR)/test_network_ping.c | $(TEST_OBJDIR)
+	@$(CC) $(TEST_CFLAGS) -c $< -o $@
+	@echo "Compiled $< successfully!"
+
+$(TEST_OBJDIR):
+	@mkdir -p $@
+
+$(TEST_CONTEXT): $(CORE_OBJECTS) $(TEST_CONTEXT_OBJ)
+	@mkdir -p $(@D)
+	@$(LINKER) $@ $(LFLAGS) $(CORE_OBJECTS) $(TEST_CONTEXT_OBJ) -lgcc
+	@echo "Built $@"
+
+$(TEST_PING): $(CORE_OBJECTS) $(TEST_PING_OBJ)
+	@mkdir -p $(@D)
+	@$(LINKER) $@ $(LFLAGS) $(CORE_OBJECTS) $(TEST_PING_OBJ) -lgcc
+	@echo "Built $@"
+
 # ======================================================================================
 # QEMU Convenience Targets / QEMU 便利目標
 # ======================================================================================
 
 # Run under software emulation / 使用純軟體模擬執行
 run: $(BINDIR)/$(TARGET)
-	@echo "Launching QEMU (software emulation) / 啟動 QEMU（純軟體模擬）"
-	$(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) -kernel $(QEMU_IMAGE)
+ifeq ($(NET_MODE),bridge)
+	@echo "Launching QEMU (bridge networking) / 啟動 QEMU（橋接網路）"
+	@if [ "$$EUID" -ne 0 ]; then \
+		echo "ERROR: Bridge networking requires root privileges. Please run with sudo."; \
+		exit 1; \
+	fi
+	@if ! ip link show $(QEMU_BRIDGE_TAP) >/dev/null 2>&1; then \
+		echo "ERROR: TAP interface '$(QEMU_BRIDGE_TAP)' not found. Please create it before running."; \
+		exit 1; \
+	fi
+	@echo "Using existing tap interface: $(QEMU_BRIDGE_TAP)"
+	@if command -v brctl >/dev/null 2>&1; then \
+		echo "Bridge status:"; \
+		brctl show br-lan | grep -A 1 "bridge name" || brctl show br-lan; \
+	else \
+		echo "brctl not available; skipping bridge status output."; \
+	fi
+	$(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) $(QEMU_BRIDGE_FLAGS) -kernel $(QEMU_IMAGE)
+else
+	@echo "Launching QEMU (user-mode networking) / 啟動 QEMU（使用 user-mode 網路）"
+	$(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) $(QEMU_USER_NET_FLAGS) -kernel $(QEMU_IMAGE)
+endif
 
 # Run with KVM acceleration / 啟動 KVM 加速模擬
 run-kvm: $(BINDIR)/$(TARGET)
@@ -132,6 +190,50 @@ dqemu: $(BINDIR)/$(TARGET)
 # ======================================================================================
 # Utility Targets / 其他常用目標
 # ======================================================================================
+
+test: test-context test-ping
+
+test-context: $(TEST_CONTEXT)
+	@echo "========================================="
+	@echo "Running Test Case 1: Context Switch & Timer"
+	@echo "========================================="
+	@status=0; \
+	output=$$(timeout --foreground 20s $(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) -kernel $(TEST_CONTEXT) 2>&1) || status=$$?; \
+	echo "$$output"; \
+	if echo "$$output" | grep -q "\[PASS\]"; then \
+		echo ""; echo "✓ TEST PASSED"; exit 0; \
+	elif echo "$$output" | grep -q "\[FAIL\]"; then \
+		echo ""; echo "✗ TEST FAILED"; exit 1; \
+	elif [ $$status -eq 124 ]; then \
+		echo ""; echo "⚠ TEST TIMED OUT (no PASS marker)"; exit 1; \
+	else \
+		exit $$status; \
+	fi
+
+test-ping: $(TEST_PING)
+	@echo "========================================="
+	@echo "Running Test Case 2: Network Ping"
+	@echo "========================================="
+	@if [ "$$(id -u)" -ne 0 ]; then \
+		echo "[SKIP] Requires root privileges for TAP networking"; \
+		exit 0; \
+	fi; \
+	if ! ip link show $(QEMU_BRIDGE_TAP) >/dev/null 2>&1; then \
+		echo "[SKIP] TAP interface '$(QEMU_BRIDGE_TAP)' not available"; \
+		exit 0; \
+	fi; \
+	status=0; \
+	output=$$(timeout --foreground 20s $(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) $(QEMU_BRIDGE_FLAGS) -kernel $(TEST_PING) 2>&1) || status=$$?; \
+	echo "$$output"; \
+	if echo "$$output" | grep -q "\[PASS\]"; then \
+		echo ""; echo "✓ TEST PASSED"; exit 0; \
+	elif echo "$$output" | grep -q "\[FAIL\]"; then \
+		echo ""; echo "✗ TEST FAILED"; exit 1; \
+	elif [ $$status -eq 124 ]; then \
+		echo ""; echo "⚠ TEST TIMED OUT (no PASS marker)"; exit 1; \
+	else \
+		exit $$status; \
+	fi
 
 # Setup host-side tap/bridge network for QEMU / 建立 QEMU 使用的橋接網路與 TAP 介面
 setup-network:

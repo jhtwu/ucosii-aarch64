@@ -705,13 +705,10 @@ void  OSIntExit (void)
 
 #if OS_TASK_CREATE_EXT_EN > 0u
 #if defined(OS_TLS_TBL_SIZE) && (OS_TLS_TBL_SIZE > 0u)
-					printf("[%s:%d]\n",__func__,__LINE__);
                     OS_TLS_TaskSw();
 #endif
 #endif
-                    uart_puts("OSIntCtxSw->\n");
-                    uart_puthex(OSPrioHighRdy);
-                    OSIntCtxSw();                          /* Perform interrupt level ctx switch       */
+	                    OSIntCtxSw();                          /* Perform interrupt level ctx switch       */
                 }
             }
         }
@@ -1696,8 +1693,6 @@ void  OS_Sched (void)
 #endif
 #endif
 
-				uart_puts("OSTaskSwHook\n");
-				uart_puthex(OSPrioHighRdy);
                 OS_TASK_SW();                          /* Perform a context switch                     */
             }
         }
@@ -1813,21 +1808,9 @@ void  OS_TaskIdle (void *p_arg)
 #if OS_CRITICAL_METHOD == 3u                     /* Allocate storage for CPU status register           */
     OS_CPU_SR  cpu_sr = 0u;
 #endif
-	int count;
-
-	// printf(GREEN "[%s:%d]\n" NONE ,__func__,__LINE__);
-
     p_arg = p_arg;                               /* Prevent compiler warning for not using 'p_arg'     */
 
-		uart_puts("start OS_TaskIdle\n");	
-	   for (;;) {
-#if 1 //def TASK_DBG
-		//dump(__func__,__LINE__);
-		count++;
-	 if((count%100)==0)
-		uart_puts( LIGHT_GREEN "OS_TaskIdle\n" NONE);	
-	// 	printf(GREEN "\t\t[%s:%d] 222222222222 OS_TaskIdle \n" NONE ,__func__,__LINE__);
-#endif
+       for (;;) {
         OS_ENTER_CRITICAL();
         OSIdleCtr++;
         OS_EXIT_CRITICAL();

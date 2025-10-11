@@ -26,6 +26,12 @@
 
 extern struct virtio_net_dev *virtio_net_device;
 
+__attribute__((weak)) void test_net_on_frame(u8 *pkt, int len)
+{
+    (void)pkt;
+    (void)len;
+}
+
 /* Ethernet header */
 struct eth_hdr {
     u8 dest_mac[6];
@@ -198,6 +204,8 @@ void net_process_received_packet(uchar *pkt, int len)
 {
     struct eth_hdr *eth = (struct eth_hdr *)pkt;
     u16 ethertype;
+
+    test_net_on_frame((u8 *)pkt, len);
 
     if (len < sizeof(struct eth_hdr)) {
         return;
