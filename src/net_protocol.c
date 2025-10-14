@@ -1,6 +1,9 @@
 #include "includes.h"
 #include "virtio_net.h"
 #include <net.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <string.h>
 
 /* Network byte order helpers - inline macros */
 #ifndef htons
@@ -18,13 +21,24 @@
 #endif
 
 /* Guest network configuration */
-#define GUEST_IP_BYTE0   192
-#define GUEST_IP_BYTE1   168
-#define GUEST_IP_BYTE2   1
-#define GUEST_IP_BYTE3   1
-#define GUEST_MAC        {0x52, 0x54, 0x00, 0x12, 0x34, 0x56}
+#define GUEST_LAN_IP   {192, 168, 1, 1}
+#define GUEST_WAN_IP   {10, 3, 5, 99}
+#define GUEST_LAN_MAC  {0x52, 0x54, 0x00, 0x12, 0x34, 0x56}
+#define GUEST_WAN_MAC  {0x52, 0x54, 0x00, 0x65, 0x43, 0x21}
 
 extern struct virtio_net_dev *virtio_net_device;
+
+struct net_iface {
+    u8 ip[4];
+    u8 default_mac[6];
+    u8 mac[6];
+    struct eth_device *dev;
+};
+
+static struct net_iface net_ifaces[] = {
+    { GUEST_LAN_IP, GUEST_LAN_MAC, {0}, NULL },
+    { GUEST_WAN_IP, GUEST_WAN_MAC, {0}, NULL },
+};
 
 __attribute__((weak)) void test_net_on_frame(u8 *pkt, int len)
 {
@@ -62,6 +76,49 @@ static u16 ip_checksum(void *data, int len)
     return ~sum;  /* One's complement */
 }
 
+static struct net_iface *net_find_iface_by_ip(const u8 ip_bytes[4])
+{
+    for (size_t i = 0; i < sizeof(net_ifaces) / sizeof(net_ifaces[0]); ++i) {
+        if (net_ifaces[i].dev &&
+            net_ifaces[i].ip[0] == ip_bytes[0] &&
+            net_ifaces[i].ip[1] == ip_bytes[1] &&
+            net_ifaces[i].ip[2] == ip_bytes[2] &&
+            net_ifaces[i].ip[3] == ip_bytes[3]) {
+            return &net_ifaces[i];
+        }
+    }
+    return NULL;
+}
+
+void net_register_iface(struct eth_device *dev)
+{
+    if (!dev) {
+        return;
+    }
+
+    for (size_t i = 0; i < sizeof(net_ifaces) / sizeof(net_ifaces[0]); ++i) {
+        if (net_ifaces[i].dev) {
+            continue;
+        }
+
+        if (memcmp(dev->enetaddr, net_ifaces[i].default_mac, 6) == 0 ||
+            memcmp(net_ifaces[i].mac, dev->enetaddr, 6) == 0) {
+            memcpy(net_ifaces[i].mac, dev->enetaddr, 6);
+            net_ifaces[i].dev = dev;
+            return;
+        }
+    }
+
+    /* Fallback: bind to first free slot */
+    for (size_t i = 0; i < sizeof(net_ifaces) / sizeof(net_ifaces[0]); ++i) {
+        if (!net_ifaces[i].dev) {
+            memcpy(net_ifaces[i].mac, dev->enetaddr, 6);
+            net_ifaces[i].dev = dev;
+            return;
+        }
+    }
+}
+
 /* Handle ARP request */
 static void handle_arp(u8 *pkt, int len)
 {
@@ -70,8 +127,8 @@ static void handle_arp(u8 *pkt, int len)
     u8 reply[64];
     struct eth_hdr *reply_eth;
     struct arp_hdr *reply_arp;
-    u8 guest_mac[] = GUEST_MAC;
     u8 *sender_mac, *sender_ip, *target_ip;
+    struct net_iface *iface;
 
     if (len < sizeof(struct eth_hdr) + 28) {
         return;
@@ -87,8 +144,8 @@ static void handle_arp(u8 *pkt, int len)
         return;
     }
 
-    if (target_ip[0] != GUEST_IP_BYTE0 || target_ip[1] != GUEST_IP_BYTE1 ||
-        target_ip[2] != GUEST_IP_BYTE2 || target_ip[3] != GUEST_IP_BYTE3) {
+    iface = net_find_iface_by_ip(target_ip);
+    if (!iface || !iface->dev) {
         return;
     }
 
@@ -99,7 +156,7 @@ static void handle_arp(u8 *pkt, int len)
 
     /* Ethernet header */
     memcpy(reply_eth->dest_mac, sender_mac, 6);
-    memcpy(reply_eth->src_mac, guest_mac, 6);
+    memcpy(reply_eth->src_mac, iface->mac, 6);
     reply_eth->ethertype = htons(0x0806);  /* ARP */
 
     /* ARP reply */
@@ -108,14 +165,14 @@ static void handle_arp(u8 *pkt, int len)
     reply_arp->ar_hln = 6;
     reply_arp->ar_pln = 4;
     reply_arp->ar_op = htons(ARPOP_REPLY);
-    memcpy(&reply_arp->ar_data[0], guest_mac, 6);
+    memcpy(&reply_arp->ar_data[0], iface->mac, 6);
     memcpy(&reply_arp->ar_data[6], target_ip, 4);
     memcpy(&reply_arp->ar_data[10], sender_mac, 6);
     memcpy(&reply_arp->ar_data[16], sender_ip, 4);
 
     /* Send ARP reply */
-    if (virtio_net_device) {
-        virtio_net_send(&virtio_net_device->eth_dev, reply, 42);
+    if (iface->dev) {
+        virtio_net_send(iface->dev, reply, 42);
     }
 }
 
@@ -129,12 +186,12 @@ static void handle_icmp(u8 *pkt, int len)
     struct eth_hdr *reply_eth;
     struct ip_hdr *reply_ip;
     struct icmp_hdr *reply_icmp;
-    u8 guest_mac[] = GUEST_MAC;
     int ip_len = ntohs(ip->ip_len);
     int icmp_len = ip_len - IP_HDR_SIZE;
     u8 *payload;
     int payload_len;
     u32 dest_ip;
+    struct net_iface *iface;
 
     if (len < sizeof(struct eth_hdr) + IP_HDR_SIZE + 8) {
         return;
@@ -147,8 +204,17 @@ static void handle_icmp(u8 *pkt, int len)
 
     /* Check if for our IP */
     dest_ip = ntohl(ip->ip_dst.s_addr);
-    if ((dest_ip >> 24) != GUEST_IP_BYTE0 || ((dest_ip >> 16) & 0xff) != GUEST_IP_BYTE1 ||
-        ((dest_ip >> 8) & 0xff) != GUEST_IP_BYTE2 || (dest_ip & 0xff) != GUEST_IP_BYTE3) {
+    {
+        u8 ip_bytes[4] = {
+            (u8)((dest_ip >> 24) & 0xff),
+            (u8)((dest_ip >> 16) & 0xff),
+            (u8)((dest_ip >> 8) & 0xff),
+            (u8)(dest_ip & 0xff)
+        };
+        iface = net_find_iface_by_ip(ip_bytes);
+    }
+
+    if (!iface || !iface->dev) {
         return;
     }
 
@@ -163,7 +229,7 @@ static void handle_icmp(u8 *pkt, int len)
 
     /* Ethernet header */
     memcpy(reply_eth->dest_mac, eth->src_mac, 6);
-    memcpy(reply_eth->src_mac, guest_mac, 6);
+    memcpy(reply_eth->src_mac, iface->mac, 6);
     reply_eth->ethertype = htons(0x0800);  /* IPv4 */
 
     /* IP header */
@@ -193,9 +259,9 @@ static void handle_icmp(u8 *pkt, int len)
     reply_icmp->checksum = ip_checksum(reply_icmp, 8 + payload_len);
 
     /* Send ICMP reply */
-    if (virtio_net_device) {
+    if (iface->dev) {
         int total_len = sizeof(struct eth_hdr) + IP_HDR_SIZE + 8 + payload_len;
-        virtio_net_send(&virtio_net_device->eth_dev, reply, total_len);
+        virtio_net_send(iface->dev, reply, total_len);
     }
 }
 

@@ -9,9 +9,15 @@
 #include <malloc.h>
 #include <net.h>
 #include <asm/system.h>
+#include <stddef.h>
+#include <stdbool.h>
 #include "virtio_net.h"
 #include "includes.h"
 
+#define VIRTIO_NET_MAX_DEVICES 2
+
+static struct virtio_net_dev *virtio_net_device_list[VIRTIO_NET_MAX_DEVICES];
+static size_t virtio_net_device_count;
 struct virtio_net_dev *virtio_net_device = NULL;
 
 /* Timer functions from SMC911x */
@@ -116,22 +122,32 @@ static int virtio_net_init_queue(struct virtio_net_dev *dev, int queue_num,
 /* VirtIO interrupt handler for GICv3 */
 int BSP_OS_VirtioNetHandler(unsigned int cpu_id)
 {
-    u32 int_status;
+    (void)cpu_id;
 
-    if (!virtio_net_device) {
-        return 0;
-    }
+    for (size_t i = 0; i < virtio_net_device_count; ++i) {
+        struct virtio_net_dev *dev = virtio_net_device_list[i];
+        u32 int_status;
 
-    /* Read and acknowledge interrupt */
-    int_status = virtio_mmio_read(virtio_net_device, VIRTIO_MMIO_INTERRUPT_STATUS);
-    virtio_mmio_write(virtio_net_device, VIRTIO_MMIO_INTERRUPT_ACK, int_status);
+        if (!dev) {
+            continue;
+        }
 
-    if (int_status & 0x1) {  /* Used buffer notification */
-        /* Lazy cleanup of TX completions (amortized cost) */
-        virtio_net_device->tx_last_used = virtio_net_device->tx_used->idx;
+        int_status = virtio_mmio_read(dev, VIRTIO_MMIO_INTERRUPT_STATUS);
+        if (int_status == 0) {
+            continue;
+        }
 
-        /* Process received packets in normal path */
-        virtio_net_rx(&virtio_net_device->eth_dev);
+        virtio_mmio_write(dev, VIRTIO_MMIO_INTERRUPT_ACK, int_status);
+
+        if (int_status & 0x1) {  /* Used buffer notification */
+            /* Lazy cleanup of TX completions (amortized cost) */
+            dev->tx_last_used = dev->tx_used->idx;
+
+            dev->irq_count++;
+
+            /* Process received packets in normal path */
+            virtio_net_rx(&dev->eth_dev);
+        }
     }
 
     return 0;
@@ -399,6 +415,7 @@ int virtio_net_rx(struct eth_device *eth_dev)
         if (pktlen > 0 && pktlen <= PKTSIZE_ALIGN) {
             memcpy(net_rx_packets2, pkt, pktlen);
             net_process_received_packet(net_rx_packets2, pktlen);
+            dev->rx_packet_count++;
         }
 
         /* Recycle buffer - make it available again */
@@ -430,7 +447,7 @@ void virtio_net_halt(struct eth_device *eth_dev)
 }
 
 /* Scan for VirtIO devices */
-static unsigned long virtio_net_scan_devices(u32 *found_irq)
+static int virtio_net_scan_devices(unsigned long *found_addrs, u32 *found_irqs, int max_devices)
 {
     unsigned long addrs[] = {
         0x0a000000, 0x0a000200, 0x0a000400, 0x0a000600,
@@ -439,64 +456,54 @@ static unsigned long virtio_net_scan_devices(u32 *found_irq)
         0x0a001800, 0x0a001a00, 0x0a001c00, 0x0a001e00
     };
     u32 irqs[] = {48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63};
-    int i, j;
-    u32 magic, device_id, version, vendor_id;
+    int found = 0;
 
     printf(DRIVERNAME ": Scanning for VirtIO devices...\n");
 
-    for (i = 0; i < sizeof(addrs)/sizeof(addrs[0]); i++) {
-        magic = *(volatile u32*)(addrs[i] + VIRTIO_MMIO_MAGIC_VALUE);
+    for (int i = 0; i < (int)(sizeof(addrs) / sizeof(addrs[0])); ++i) {
+        u32 magic = *(volatile u32*)(addrs[i] + VIRTIO_MMIO_MAGIC_VALUE);
 
         if (magic == 0x74726976) {  /* 'virt' */
-            version = *(volatile u32*)(addrs[i] + VIRTIO_MMIO_VERSION);
-            device_id = *(volatile u32*)(addrs[i] + VIRTIO_MMIO_DEVICE_ID);
-            vendor_id = *(volatile u32*)(addrs[i] + VIRTIO_MMIO_VENDOR_ID);
+            u32 version = *(volatile u32*)(addrs[i] + VIRTIO_MMIO_VERSION);
+            u32 device_id = *(volatile u32*)(addrs[i] + VIRTIO_MMIO_DEVICE_ID);
+            u32 vendor_id = *(volatile u32*)(addrs[i] + VIRTIO_MMIO_VENDOR_ID);
 
             printf(DRIVERNAME ": Found VirtIO v%d at 0x%lx, DevID=%d, VendorID=0x%x\n",
                    version, addrs[i], device_id, vendor_id);
 
-            /* For virtio-net-device, try checking config space for MAC */
-            if (device_id == 0 && version >= 1) {
-                /* Try to identify by reading config - net device has MAC at offset 0 */
-                u32 mac_check = *(volatile u32*)(addrs[i] + VIRTIO_MMIO_CONFIG);
-                printf(DRIVERNAME ": Config MAC check: 0x%x\n", mac_check);
-
-                /* Assume first valid device is network - QEMU typically places net first */
-                printf(DRIVERNAME ": Assuming first device is VirtIO Net\n");
-                *found_irq = irqs[i];
-                return addrs[i];
+            if (found < max_devices) {
+                if (device_id == VIRTIO_ID_NET) {
+                    found_addrs[found] = addrs[i];
+                    found_irqs[found] = irqs[i];
+                    ++found;
+                } else if (device_id == 0 && version >= 1) {
+                    u32 mac_check = *(volatile u32*)(addrs[i] + VIRTIO_MMIO_CONFIG);
+                    printf(DRIVERNAME ": Config MAC check: 0x%x\n", mac_check);
+                    found_addrs[found] = addrs[i];
+                    found_irqs[found] = irqs[i];
+                    ++found;
+                }
             }
-            else if (device_id == VIRTIO_ID_NET) {
-                printf(DRIVERNAME ": Found VirtIO Net device!\n");
-                *found_irq = irqs[i];
-                return addrs[i];
+
+            if (found >= max_devices) {
+                break;
             }
         }
     }
 
-    return 0;
+    return found;
 }
 
-/* Initialize VirtIO Net */
-int virtio_net_initialize(unsigned long base_addr, u32 irq)
+static int virtio_net_add_device(unsigned long base_addr, u32 irq)
 {
     struct virtio_net_dev *dev;
-    unsigned long scan_addr;
-    u32 scan_irq;
 
-    printf("[%s] Initializing VirtIO Net driver\n", __func__);
-
-    /* Scan for device if base_addr is default */
-    if (base_addr == CONFIG_VIRTIO_NET_BASE) {
-        scan_addr = virtio_net_scan_devices(&scan_irq);
-        if (scan_addr) {
-            base_addr = scan_addr;
-            irq = scan_irq;
-            printf(DRIVERNAME ": Using scanned address 0x%lx, IRQ %d\n", base_addr, irq);
-        }
+    if (virtio_net_device_count >= VIRTIO_NET_MAX_DEVICES) {
+        printf(DRIVERNAME ": Maximum device count reached (%lu)\n",
+               (unsigned long)virtio_net_device_count);
+        return 0;
     }
 
-    /* Allocate device structure */
     dev = (struct virtio_net_dev *)malloc(sizeof(struct virtio_net_dev));
     if (!dev) {
         printf(DRIVERNAME ": Failed to allocate device structure\n");
@@ -508,13 +515,11 @@ int virtio_net_initialize(unsigned long base_addr, u32 irq)
     dev->iobase = base_addr;
     dev->irq = irq;
 
-    /* Initialize device */
     if (virtio_net_init_device(dev) < 0) {
         free(dev);
         return -1;
     }
 
-    /* Setup eth_device callbacks */
     dev->eth_dev.init = virtio_net_init_device;
     dev->eth_dev.halt = virtio_net_halt;
     dev->eth_dev.send = virtio_net_send;
@@ -522,11 +527,66 @@ int virtio_net_initialize(unsigned long base_addr, u32 irq)
     dev->eth_dev.iobase = base_addr;
     sprintf(dev->eth_dev.name, "%s", DRIVERNAME);
 
-    /* Register ethernet device */
     eth_register(&dev->eth_dev);
+    net_register_iface(&dev->eth_dev);
 
-    /* Save global pointer */
-    virtio_net_device = dev;
+    if (virtio_net_device_count == 0) {
+        virtio_net_device = dev;
+    }
+
+    virtio_net_device_list[virtio_net_device_count++] = dev;
 
     return 1;
+}
+
+/* Initialize VirtIO Net */
+int virtio_net_initialize(unsigned long base_addr, u32 irq)
+{
+    unsigned long found_addrs[VIRTIO_NET_MAX_DEVICES];
+    u32 found_irqs[VIRTIO_NET_MAX_DEVICES];
+    int found = 0;
+    int initialized = 0;
+
+    if (virtio_net_device_count > 0) {
+        return (int)virtio_net_device_count;
+    }
+
+    printf("[%s] Initializing VirtIO Net driver\n", __func__);
+
+    found = virtio_net_scan_devices(found_addrs, found_irqs, VIRTIO_NET_MAX_DEVICES);
+
+    if (found == 0 && base_addr != 0) {
+        found_addrs[found] = base_addr;
+        found_irqs[found] = irq;
+        found = 1;
+    }
+
+    for (int i = 0; i < found; ++i) {
+        int rc = virtio_net_add_device(found_addrs[i], found_irqs[i]);
+        if (rc > 0) {
+            printf(DRIVERNAME ": Registered device at 0x%lx IRQ %u\n",
+                   found_addrs[i], found_irqs[i]);
+            initialized += rc;
+        }
+    }
+
+    if (initialized == 0) {
+        printf(DRIVERNAME ": No VirtIO network devices initialized\n");
+        return -1;
+    }
+
+    return (int)virtio_net_device_count;
+}
+
+struct virtio_net_dev *virtio_net_get_device(size_t index)
+{
+    if (index < virtio_net_device_count) {
+        return virtio_net_device_list[index];
+    }
+    return NULL;
+}
+
+size_t virtio_net_get_device_count(void)
+{
+    return virtio_net_device_count;
 }

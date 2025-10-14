@@ -73,12 +73,18 @@ This creates the `br-lan` and `br-wan` bridges and associated TAP interfaces. Ad
 
 如需與原腳本相同的橋接網路，請執行 `sudo make setup-network`。若主機網卡名稱或 IP 配置不同，請修改 Makefile 中對應的參數。
 
+### Dual NIC Diagnostics / 雙介面偵錯
+- `make run` 會同時掛載 `qemu-lan`（LAN）與 `qemu-wan`（WAN）兩個 TAP，韌體將自動對 `192.168.1.103` 與 `10.3.5.103` 發送 ARP/ICMP 測試，並輸出 `IRQ delta` 與 `RX packets`，用以確認收包中斷是否正常。
+- 若重新建立 TAP，記得 `ip link set qemu-xxx up` 並 `brctl addif` 到對應的 bridge，否則封包不會進入客體系統。
+- 詳細流程與疑難排除可參考 `doc/dual_nic_ping_guide.zh.md`。
+
 ## Development Tips / 開發建議
 - Inspect `os.list` after building to correlate C sources with the generated assembly.
 - Update `CORE` or memory sizes in the Makefile if you target different virtual hardware.
 - When porting to real hardware, replace the QEMU targets with board-specific boot flows.
+- New contributors can start with `doc/ai_onboarding.zh.md`, which summarises project structure, common tweaks, and how to run automated ping diagnostics without sudo once the TAP interface is prepared.
 
-建置後可透過 `os.list` 對照 C 原始碼與組合語言；若要在真實硬體上執行，請依需求調整 Makefile 中的 CPU 與記憶體設定，並替換成實體開機流程。
+建置後可透過 `os.list` 對照 C 原始碼與組合語言；若要在真實硬體上執行，請依需求調整 Makefile 中的 CPU 與記憶體設定，並替換成實體開機流程。首次接觸專案時，可先閱讀 `doc/ai_onboarding.zh.md`，快速掌握建置、修改與測試流程。
 
 ## Troubleshooting / 疑難排解
 - **Toolchain not found**: ensure the `$(TOOLCHAIN)` prefix is correct or available in `PATH`.

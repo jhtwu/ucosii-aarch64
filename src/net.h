@@ -678,6 +678,7 @@ int net_send_udp_packet(uchar *ether, struct in_addr dest, int dport,
 
 /* Processes a received packet */
 void net_process_received_packet(uchar *in_packet, int len);
+void net_register_iface(struct eth_device *dev);
 
 #ifdef CONFIG_NETCONSOLE
 void nc_start(void);

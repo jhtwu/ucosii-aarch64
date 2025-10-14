@@ -51,8 +51,11 @@ QEMU_KVM_FLAGS  = -cpu host --enable-kvm -m 256M
 QEMU_GDB_FLAGS  = -gdb tcp::2222 -S
 QEMU_BRIDGE_TAP = qemu-lan
 QEMU_BRIDGE_MAC = 52:54:00:12:34:56
+QEMU_WAN_TAP    = qemu-wan
+QEMU_WAN_MAC    = 52:54:00:65:43:21
 QEMU_USER_NET_FLAGS = -netdev user,id=net0 -device virtio-net-device,netdev=net0
 QEMU_BRIDGE_FLAGS = -netdev tap,id=net0,ifname=$(QEMU_BRIDGE_TAP),script=no,downscript=no -device virtio-net-device,netdev=net0,bus=virtio-mmio-bus.0,mac=$(QEMU_BRIDGE_MAC)
+QEMU_WAN_BRIDGE_FLAGS = -netdev tap,id=net0,ifname=$(QEMU_WAN_TAP),script=no,downscript=no -device virtio-net-device,netdev=net0,bus=virtio-mmio-bus.0,mac=$(QEMU_WAN_MAC)
 NET_MODE ?= bridge
 
 # ======================================================================================
@@ -71,21 +74,23 @@ CORE_OBJECTS = $(filter-out $(APP_OBJECT), $(OBJECTS_ALL))
 TESTDIR            = test
 TEST_OBJDIR        = test_build
 TEST_SUPPORT       = test_support
-TEST_NAMES         = test_context_timer test_network_ping test_udp_flood
+TEST_NAMES         = test_context_timer test_network_ping test_network_ping_wan test_udp_flood
 TEST_SUPPORT_OBJ   = $(addprefix $(TEST_OBJDIR)/,$(addsuffix .o,$(TEST_SUPPORT)))
 TEST_PROGRAM_OBJS  = $(addprefix $(TEST_OBJDIR)/,$(addsuffix .o,$(TEST_NAMES)))
 TEST_CONTEXT_NAME  = test_context_timer
 TEST_PING_NAME     = test_network_ping
+TEST_PING_WAN_NAME = test_network_ping_wan
 TEST_BINDIR        = test_bin
 TEST_CONTEXT_BIN   = $(TEST_BINDIR)/$(TEST_CONTEXT_NAME).elf
 TEST_PING_BIN      = $(TEST_BINDIR)/$(TEST_PING_NAME).elf
+TEST_PING_WAN_BIN  = $(TEST_BINDIR)/$(TEST_PING_WAN_NAME).elf
 TEST_CFLAGS        = $(filter-out -fstack-usage,$(CFLAGS))
 rm           = rm -f
 
 # ======================================================================================
 # Phony Targets / 虛擬目標宣告
 # ======================================================================================
-.PHONY: all clean remove run run-kvm qemu qemu_gdb qemu-gdb gdb dqemu setup-network help test test-context test-ping
+.PHONY: all clean remove run run-kvm qemu qemu_gdb qemu-gdb gdb dqemu setup-network help test test-context test-ping test-ping-wan
 
 # ======================================================================================
 # Default Build Target / 預設建置目標
@@ -139,22 +144,29 @@ $(TEST_BINDIR)/test_%.elf: $(CORE_OBJECTS) $(TEST_SUPPORT_OBJ) $(TEST_OBJDIR)/te
 run: $(BINDIR)/$(TARGET)
 ifeq ($(NET_MODE),bridge)
 	@echo "Launching QEMU (bridge networking) / 啟動 QEMU（橋接網路）"
-	@if [ "$$EUID" -ne 0 ]; then \
-		echo "ERROR: Bridge networking requires root privileges. Please run with sudo."; \
-		exit 1; \
-	fi
 	@if ! ip link show $(QEMU_BRIDGE_TAP) >/dev/null 2>&1; then \
 		echo "ERROR: TAP interface '$(QEMU_BRIDGE_TAP)' not found. Please create it before running."; \
 		exit 1; \
 	fi
 	@echo "Using existing tap interface: $(QEMU_BRIDGE_TAP)"
+	@if ! ip link show $(QEMU_WAN_TAP) >/dev/null 2>&1; then \
+		echo "ERROR: TAP interface '$(QEMU_WAN_TAP)' not found. Please create it before running."; \
+		exit 1; \
+	fi
+	@echo "Using existing tap interface: $(QEMU_WAN_TAP)"
 	@if command -v brctl >/dev/null 2>&1; then \
 		echo "Bridge status:"; \
 		brctl show br-lan | grep -A 1 "bridge name" || brctl show br-lan; \
+		brctl show br-wan | grep -A 1 "bridge name" || brctl show br-wan; \
 	else \
 		echo "brctl not available; skipping bridge status output."; \
 	fi
-	$(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) $(QEMU_BRIDGE_FLAGS) -kernel $(QEMU_IMAGE)
+		timeout --foreground 60s $(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) \
+		-netdev tap,id=net0,ifname=$(QEMU_BRIDGE_TAP),script=no,downscript=no \
+		-device virtio-net-device,netdev=net0,bus=virtio-mmio-bus.0,mac=$(QEMU_BRIDGE_MAC) \
+		-netdev tap,id=net1,ifname=$(QEMU_WAN_TAP),script=no,downscript=no \
+		-device virtio-net-device,netdev=net1,bus=virtio-mmio-bus.1,mac=$(QEMU_WAN_MAC) \
+		-kernel $(QEMU_IMAGE)
 else
 	@echo "Launching QEMU (user-mode networking) / 啟動 QEMU（使用 user-mode 網路）"
 	$(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) $(QEMU_USER_NET_FLAGS) -kernel $(QEMU_IMAGE)
@@ -187,7 +199,7 @@ dqemu: $(BINDIR)/$(TARGET)
 # Utility Targets / 其他常用目標
 # ======================================================================================
 
-test: test-context test-ping test-udp
+test: test-context test-ping test-ping-wan test-udp
 
 test-context: $(TEST_CONTEXT_BIN)
 	@echo "========================================="
@@ -228,6 +240,41 @@ test-ping: $(TEST_PING_BIN)
 		echo "      Ensure it exists and is owned by $$USER:"; \
 		echo "      sudo ip tuntap add dev $(QEMU_BRIDGE_TAP) mode tap user $$USER"; \
 		echo "      sudo ip link set $(QEMU_BRIDGE_TAP) up"; \
+		exit 1; \
+	fi; \
+	echo "$$output"; \
+	if echo "$$output" | grep -q "\[PASS\]"; then \
+		echo ""; echo "✓ TEST PASSED"; exit 0; \
+	elif echo "$$output" | grep -q "\[FAIL\]"; then \
+		echo ""; echo "✗ TEST FAILED"; exit 1; \
+	elif [ $$status -eq 124 ]; then \
+		echo ""; echo "⚠ TEST TIMED OUT (no PASS marker)"; exit 1; \
+	else \
+		exit $$status; \
+	fi
+
+test-ping-wan: $(TEST_PING_WAN_BIN)
+	@echo "========================================="
+	@echo "Running Test Case 2b: WAN Network Ping"
+	@echo "========================================="
+	if ! ip link show $(QEMU_WAN_TAP) >/dev/null 2>&1; then \
+		echo "[SKIP] TAP interface '$(QEMU_WAN_TAP)' not available"; \
+		echo "      Create it with: sudo ip tuntap add dev $(QEMU_WAN_TAP) mode tap user $$USER"; \
+		exit 0; \
+	fi; \
+	status=0; \
+	output=$$(timeout --foreground 30s $(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) $(QEMU_WAN_BRIDGE_FLAGS) -kernel $(TEST_PING_WAN_BIN) 2>&1) || status=$$?; \
+	if echo "$$output" | grep -qi "could not open /dev/net/tun"; then \
+		echo "[SKIP] Access to /dev/net/tun denied."; \
+		echo "      Options: run 'sudo setcap cap_net_admin+ep $$(command -v $(QEMU))'"; \
+		echo "      or execute this target via sudo."; \
+		exit 0; \
+	fi; \
+	if echo "$$output" | grep -q "Could not set up host tap"; then \
+		echo "[FAIL] Unable to access TAP interface '$(QEMU_WAN_TAP)'"; \
+		echo "      Ensure it exists and is owned by $$USER:"; \
+		echo "      sudo ip tuntap add dev $(QEMU_WAN_TAP) mode tap user $$USER"; \
+		echo "      sudo ip link set $(QEMU_WAN_TAP) up"; \
 		exit 1; \
 	fi; \
 	echo "$$output"; \

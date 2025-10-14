@@ -49,7 +49,9 @@
 #include  <includes.h>
 #include  <asm/types.h>
 #include  <net.h>
+#include  <stddef.h>
 #include  "virtio_net.h"
+#include  "net_ping.h"
 
 /*
 *********************************************************************************************************
@@ -178,21 +180,32 @@ static void  AppTaskPrint (void *p_arg)
 }
 
 extern int eth_init(void);
-extern void send_icmp(void);
 extern struct eth_device *ethdev;
 extern struct virtio_net_dev *virtio_net_device;
+
+static const struct net_ping_target app_ping_targets[] = {
+    {
+        .name = "LAN",
+        .guest_ip = {192u, 168u, 1u, 1u},
+        .host_ip = {192u, 168u, 1u, 103u},
+        .device_index = 0u,
+    },
+    {
+        .name = "WAN",
+        .guest_ip = {10u, 3u, 5u, 99u},
+        .host_ip = {10u, 3u, 5u, 103u},
+        .device_index = 1u,
+    },
+};
 
 static void  AppTaskNetwork (void *p_arg)
 {
     int rc;
-    int test_count = 0;
-    struct eth_device *dev;
 
     (void)p_arg;
 
     uart_puts("AppTaskNetwork init\n");
 
-    /* Initialize network driver (VirtIO Net or SMC911x) */
     uart_puts("Initializing network driver...\n");
     rc = eth_init();
 
@@ -205,47 +218,19 @@ static void  AppTaskNetwork (void *p_arg)
 
     uart_puts("Network driver initialized successfully!\n");
 
-    /* Get device pointer - check both VirtIO and SMC911x */
-#ifdef CONFIG_VIRTIO_NET
-    if (virtio_net_device) {
-        dev = &virtio_net_device->eth_dev;
-        uart_puts("Using VirtIO Net device\n");
-    } else
-#endif
-    if (ethdev) {
-        dev = ethdev;
-        uart_puts("Using SMC911x device\n");
-    } else {
-        uart_puts("ERROR: No network device found!\n");
-        while (DEF_TRUE) {
-            OSTimeDlyHMSM(0, 0, 5, 0);
+    for (size_t i = 0u; i < (sizeof(app_ping_targets) / sizeof(app_ping_targets[0])); ++i) {
+        if (net_ping_run(&app_ping_targets[i], 4u, NULL) != 0) {
+            printf("[FAIL] %s ping test encountered an error\n",
+                   (app_ping_targets[i].name != NULL) ? app_ping_targets[i].name : "Network");
+            while (DEF_TRUE) {
+                OSTimeDlyHMSM(0, 0, 5, 0);
+            }
         }
     }
 
-    uart_puts("Network TX/RX test starting...\n");
-
-    /* Wait for network to stabilize */
-    OSTimeDlyHMSM(0, 0, 2, 0);
+    uart_puts("Network ping diagnostics completed. Entering idle loop.\n");
 
     while (DEF_TRUE) {
-        test_count++;
-
-        uart_puts("\n=== Network Test Iteration ");
-        printf("%d", test_count);
-        uart_puts(" ===\n");
-
-        /* Test TX: Send ARP request packet */
-        uart_puts("Testing TX: Sending ARP request packet...\n");
-        if (dev->send) {
-            send_icmp();
-        } else {
-            uart_puts("ERROR: send function not available\n");
-        }
-
-        uart_puts("TX test completed. Packet sent.\n");
-        uart_puts("RX: Waiting for incoming packets (handled by interrupt)...\n");
-
-        /* Wait 5 seconds between tests */
         OSTimeDlyHMSM(0, 0, 5, 0);
     }
 }

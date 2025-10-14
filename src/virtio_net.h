@@ -134,6 +134,10 @@ struct virtio_net_dev {
 
     /* IRQ number for GICv3 */
     u32 irq;
+
+    /* Diagnostic counts */
+    u32 irq_count;
+    u32 rx_packet_count;
 };
 
 /* Register access functions */
@@ -159,5 +163,7 @@ int virtio_net_rx(struct eth_device *dev);
 void virtio_net_halt(struct eth_device *dev);
 
 extern struct virtio_net_dev *virtio_net_device;
+struct virtio_net_dev *virtio_net_get_device(size_t index);
+size_t virtio_net_get_device_count(void);
 
 #endif /* _VIRTIO_NET_H_ */

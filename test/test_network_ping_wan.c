@@ -15,10 +15,10 @@
 
 static OS_STK net_task_stack[NET_STACK_SIZE];
 
-static const struct net_ping_target lan_target = {
-    .name = "LAN",
-    .guest_ip = {192u, 168u, 1u, 1u},
-    .host_ip = {192u, 168u, 1u, 103u},
+static const struct net_ping_target wan_target = {
+    .name = "WAN",
+    .guest_ip = {10u, 3u, 5u, 99u},
+    .host_ip = {10u, 3u, 5u, 103u},
     .device_index = 0u,
 };
 
@@ -40,10 +40,10 @@ static void net_test_task(void *p_arg)
         goto wait_forever;
     }
 
-    if (net_ping_run(&lan_target, 4u, NULL) == 0) {
-        printf("[PASS] LAN ping test completed\n");
+    if (net_ping_run(&wan_target, 4u, NULL) == 0) {
+        printf("[PASS] WAN ping test completed\n");
     } else {
-        printf("[FAIL] LAN ping test failed\n");
+        printf("[FAIL] WAN ping test failed\n");
     }
 
 wait_forever:
@@ -57,7 +57,7 @@ int main(void)
     INT8U err;
 
     printf("\n========================================\n");
-    printf("Test Case 2: Network Ping\n");
+    printf("Test Case 2b: WAN Network Ping\n");
     printf("========================================\n");
 
     CPU_Init();
