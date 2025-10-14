@@ -188,7 +188,7 @@ dqemu: $(BINDIR)/$(TARGET)
 # Utility Targets / 其他常用目標
 # ======================================================================================
 
-test: test-context test-ping test-ping-wan test-udp
+test: test-context test-ping test-ping-wan test-udp test-dual
 
 test-context: $(TEST_CONTEXT_BIN)
 	@echo "========================================="
@@ -217,7 +217,7 @@ test-ping: $(TEST_PING_BIN)
 		exit 0; \
 	fi; \
 	status=0; \
-	output=$$(timeout --foreground 20s $(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) $(QEMU_BRIDGE_FLAGS) -kernel $(TEST_PING_BIN) 2>&1) || status=$$?; \
+	output=$$(timeout --foreground 15s $(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) $(QEMU_BRIDGE_FLAGS) -kernel $(TEST_PING_BIN) 2>&1) || status=$$?; \
 	if echo "$$output" | grep -qi "could not open /dev/net/tun"; then \
 		echo "[SKIP] Access to /dev/net/tun denied."; \
 		echo "      Options: run 'sudo setcap cap_net_admin+ep $$(command -v $(QEMU))'"; \
@@ -252,7 +252,7 @@ test-ping-wan: $(TEST_PING_WAN_BIN)
 		exit 0; \
 	fi; \
 	status=0; \
-	output=$$(timeout --foreground 30s $(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) $(QEMU_WAN_BRIDGE_FLAGS) -kernel $(TEST_PING_WAN_BIN) 2>&1) || status=$$?; \
+	output=$$(timeout --foreground 15s $(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) $(QEMU_WAN_BRIDGE_FLAGS) -kernel $(TEST_PING_WAN_BIN) 2>&1) || status=$$?; \
 	if echo "$$output" | grep -qi "could not open /dev/net/tun"; then \
 		echo "[SKIP] Access to /dev/net/tun denied."; \
 		echo "      Options: run 'sudo setcap cap_net_admin+ep $$(command -v $(QEMU))'"; \
@@ -313,7 +313,7 @@ test-udp: $(TEST_BINDIR)/test_udp_flood.elf
 		exit 0; \
 	fi; \
 	status=0; \
-	output=$$(timeout --foreground 20s $(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) $(QEMU_BRIDGE_FLAGS) -kernel $(TEST_BINDIR)/test_udp_flood.elf 2>&1) || status=$$?; \
+	output=$$(timeout --foreground 15s $(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) $(QEMU_BRIDGE_FLAGS) -kernel $(TEST_BINDIR)/test_udp_flood.elf 2>&1) || status=$$?; \
 	if echo "$$output" | grep -qi "could not open /dev/net/tun"; then \
 		echo "[SKIP] Access to /dev/net/tun denied."; \
 		echo "      Options: run 'sudo setcap cap_net_admin+ep $$(command -v $(QEMU))'"; \
