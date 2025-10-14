@@ -22,13 +22,13 @@
 make                 # 編譯韌體，輸出 bin/kernel.elf
 make clean           # 清除中繼檔
 make test            # 依序執行所有測試 (context, LAN, WAN, UDP)
-make run             # 啟動 QEMU（預設 user-mode 網路）
+make run             # 啟動 QEMU（預設 bridge，需 qemu-lan TAP）
 make test-dual       # 雙網卡橋接測試 + 中斷/RX 檢查
 make test-ping       # 只測 LAN Ping
 make test-ping-wan   # 只測 WAN Ping
 ```
 
-> 注意：`make test-dual` 與 `make test-ping(-wan)` 會使用現成的 TAP 介面 (`qemu-lan`, `qemu-wan`)；若介面已設定給一般使用者，就不需要 sudo。
+> 注意：`make run`（bridge）與 `make test-dual` / `make test-ping(-wan)` 都會使用 `qemu-lan`/`qemu-wan` TAP；若介面已設定給一般使用者，就不需要 sudo。
 
 ---
 

@@ -47,6 +47,7 @@ make remove
   ```bash
   make run
   ```
+  > 預設使用 bridge networking（需 `qemu-lan` TAP）。若未配置 TAP，可改用 `NET_MODE=user make run`。
 - KVM acceleration (host must support hardware virtualization) / KVM 加速：
   ```bash
   make run-kvm
@@ -74,9 +75,10 @@ This creates the `br-lan` and `br-wan` bridges and associated TAP interfaces. Ad
 如需與原腳本相同的橋接網路，請執行 `sudo make setup-network`。若主機網卡名稱或 IP 配置不同，請修改 Makefile 中對應的參數。
 
 ### Dual NIC Diagnostics / 雙介面偵錯
-- `make test-dual` 會同時掛載 `qemu-lan`（LAN）與 `qemu-wan`（WAN）兩個 TAP，韌體將自動對 `192.168.1.103` 與 `10.3.5.103` 發送 ARP/ICMP 測試，並輸出 `IRQ delta` 與 `RX packets`，用以確認收包中斷是否正常。
-- 若重新建立 TAP，記得 `ip link set qemu-xxx up` 並 `brctl addif` 到對應的 bridge，否則封包不會進入客體系統。
+- `make test-dual` 與 `make test`（已包含該流程）會同時掛載 `qemu-lan`（LAN）與 `qemu-wan`（WAN），韌體將自動對 `192.168.1.103` 與 `10.3.5.103` 發送 ARP/ICMP 測試，並輸出 `IRQ delta` 與 `RX packets`，用以確認收包中斷是否正常。
+- 若重新建立 TAP，記得 `ip link set qemu-xxx up` 並 `brctl addif` 回到對應的 bridge，否則封包不會進入客體系統。
 - 詳細流程與疑難排除可參考 `doc/dual_nic_ping_guide.zh.md`。
+
 
 ## Development Tips / 開發建議
 - Inspect `os.list` after building to correlate C sources with the generated assembly.

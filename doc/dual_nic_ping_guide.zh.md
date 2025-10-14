@@ -59,7 +59,7 @@ make test-dual
 
 測試結束後系統進入閒置迴圈，外層 `timeout`（預設 60 秒）會中斷 QEMU，`make` 目標隨之結束。
 
-若僅需啟動 QEMU 而不進行雙介面測試，可使用 `make run`（預設 user-mode networking）。
+若僅需啟動 QEMU 而不進行雙介面測試，可使用 `make run`（預設為 bridge、需 `qemu-lan` TAP；若要改用 user-mode，可在指令前加 `NET_MODE=user`）。
 
 ---
 
