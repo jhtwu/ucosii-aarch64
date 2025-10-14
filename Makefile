@@ -90,7 +90,7 @@ rm           = rm -f
 # ======================================================================================
 # Phony Targets / 虛擬目標宣告
 # ======================================================================================
-.PHONY: all clean remove run run-kvm qemu qemu_gdb qemu-gdb gdb dqemu setup-network help test test-context test-ping test-ping-wan
+.PHONY: all clean remove run run-kvm qemu qemu_gdb qemu-gdb gdb dqemu setup-network help test test-context test-ping test-ping-wan test-dual
 
 # ======================================================================================
 # Default Build Target / 預設建置目標
@@ -149,24 +149,13 @@ ifeq ($(NET_MODE),bridge)
 		exit 1; \
 	fi
 	@echo "Using existing tap interface: $(QEMU_BRIDGE_TAP)"
-	@if ! ip link show $(QEMU_WAN_TAP) >/dev/null 2>&1; then \
-		echo "ERROR: TAP interface '$(QEMU_WAN_TAP)' not found. Please create it before running."; \
-		exit 1; \
-	fi
-	@echo "Using existing tap interface: $(QEMU_WAN_TAP)"
 	@if command -v brctl >/dev/null 2>&1; then \
 		echo "Bridge status:"; \
 		brctl show br-lan | grep -A 1 "bridge name" || brctl show br-lan; \
-		brctl show br-wan | grep -A 1 "bridge name" || brctl show br-wan; \
 	else \
 		echo "brctl not available; skipping bridge status output."; \
 	fi
-		timeout --foreground 60s $(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) \
-		-netdev tap,id=net0,ifname=$(QEMU_BRIDGE_TAP),script=no,downscript=no \
-		-device virtio-net-device,netdev=net0,bus=virtio-mmio-bus.0,mac=$(QEMU_BRIDGE_MAC) \
-		-netdev tap,id=net1,ifname=$(QEMU_WAN_TAP),script=no,downscript=no \
-		-device virtio-net-device,netdev=net1,bus=virtio-mmio-bus.1,mac=$(QEMU_WAN_MAC) \
-		-kernel $(QEMU_IMAGE)
+	timeout --foreground 60s $(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) $(QEMU_BRIDGE_FLAGS) -kernel $(QEMU_IMAGE)
 else
 	@echo "Launching QEMU (user-mode networking) / 啟動 QEMU（使用 user-mode 網路）"
 	$(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) $(QEMU_USER_NET_FLAGS) -kernel $(QEMU_IMAGE)
@@ -287,6 +276,32 @@ test-ping-wan: $(TEST_PING_WAN_BIN)
 	else \
 		exit $$status; \
 	fi
+
+test-dual: $(BINDIR)/$(TARGET)
+	@echo "========================================="
+	@echo "Running Dual NIC Ping Diagnostics"
+	@echo "========================================="
+	@if ! ip link show $(QEMU_BRIDGE_TAP) >/dev/null 2>&1; then \
+		echo "ERROR: TAP interface '$(QEMU_BRIDGE_TAP)' not found. Please create it before running."; \
+		exit 1; \
+	fi
+	@if ! ip link show $(QEMU_WAN_TAP) >/dev/null 2>&1; then \
+		echo "ERROR: TAP interface '$(QEMU_WAN_TAP)' not found. Please create it before running."; \
+		exit 1; \
+	fi
+	@if command -v brctl >/dev/null 2>&1; then \
+		echo "Bridge status:"; \
+		brctl show br-lan | grep -A 1 "bridge name" || brctl show br-lan; \
+		brctl show br-wan | grep -A 1 "bridge name" || brctl show br-wan; \
+	else \
+		echo "brctl not available; skipping bridge status output."; \
+	fi
+	timeout --foreground 60s $(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) \
+		-netdev tap,id=net0,ifname=$(QEMU_BRIDGE_TAP),script=no,downscript=no \
+		-device virtio-net-device,netdev=net0,bus=virtio-mmio-bus.0,mac=$(QEMU_BRIDGE_MAC) \
+		-netdev tap,id=net1,ifname=$(QEMU_WAN_TAP),script=no,downscript=no \
+		-device virtio-net-device,netdev=net1,bus=virtio-mmio-bus.1,mac=$(QEMU_WAN_MAC) \
+		-kernel $(QEMU_IMAGE)
 
 test-udp: $(TEST_BINDIR)/test_udp_flood.elf
 	@echo "========================================="

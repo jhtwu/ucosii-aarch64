@@ -35,7 +35,7 @@ brctl show
 ## 2. 執行整體測試
 
 ```bash
-make run
+make test-dual
 ```
 
 啟動後韌體會依序執行：
@@ -58,6 +58,8 @@ make run
 `IRQ delta` 與 `RX packets` 代表該介面自測試開始後新增的中斷次數與接收封包數；只要兩者皆非零，即可確認驅動有偵測到封包並觸發中斷。
 
 測試結束後系統進入閒置迴圈，外層 `timeout`（預設 60 秒）會中斷 QEMU，`make` 目標隨之結束。
+
+若僅需啟動 QEMU 而不進行雙介面測試，可使用 `make run`（預設 user-mode networking）。
 
 ---
 

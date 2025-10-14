@@ -22,12 +22,13 @@
 make                 # 編譯韌體，輸出 bin/kernel.elf
 make clean           # 清除中繼檔
 make test            # 依序執行所有測試 (context, LAN, WAN, UDP)
-make run             # 啟動 QEMU，同步檢查 LAN/WAN 封包 & 中斷
+make run             # 啟動 QEMU（預設 user-mode 網路）
+make test-dual       # 雙網卡橋接測試 + 中斷/RX 檢查
 make test-ping       # 只測 LAN Ping
 make test-ping-wan   # 只測 WAN Ping
 ```
 
-> 注意：`make run` 與 `make test-ping(-wan)` 會使用現成的 TAP 介面 (`qemu-lan`, `qemu-wan`)；若介面已設定給一般使用者，就不需要 sudo。
+> 注意：`make test-dual` 與 `make test-ping(-wan)` 會使用現成的 TAP 介面 (`qemu-lan`, `qemu-wan`)；若介面已設定給一般使用者，就不需要 sudo。
 
 ---
 
@@ -40,12 +41,14 @@ make test-ping-wan   # 只測 WAN Ping
    - `src/net_ping.c`：共用的 Ping 驗證程式（ARP + ICMP + 中斷計數）。
    - `src/virtio_net.c`：VirtIO 驅動與統計欄位。
 4. **跑測試 (`make test`)**：所有測試以 `timeout` 包裝，不會卡住。輸出 PASS/FAIL 判斷即可。
-5. **執行 (`make run`)**：觀察 console，有以下關鍵訊息：
-   ```
-   [RESULT] ...
-   [INFO] IRQ delta=5 RX packets=6
-   ```
-   LAN 與 WAN 都要看到非零的 IRQ / RX 才算成功。
+5. **執行 (`make run` / `make test-dual`)**：
+   - `make run`：一般測試，使用 user-mode networking，適合觀察開機流程或手動除錯。
+   - `make test-dual`：橋接雙網卡，console 會輸出：
+     ```
+     [RESULT] ...
+     [INFO] IRQ delta=5 RX packets=6
+     ```
+     LAN 與 WAN 都要看到非零的 IRQ / RX 才算成功。
 6. **整理檔案**：必要時 `make clean`，檢查 git 狀態無多餘檔案再 commit。
 
 ---
