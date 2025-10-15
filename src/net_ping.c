@@ -343,7 +343,9 @@ int net_ping_run(const struct net_ping_target *target,
 
     bool arp_wait_logged = false;
     for (uint32_t waited = 0u; waited < 2000u && !ctx->state.arp_completed; waited += 10u) {
+#ifndef CONFIG_VIRTIO_NET_ENABLE_IRQS
         dev->recv(dev);
+#endif
         if (!ctx->state.arp_completed && !arp_wait_logged && waited >= 500u) {
             printf("[DEBUG] Still waiting for ARP reply... (%u ms elapsed)\n", waited);
             arp_wait_logged = true;
@@ -386,7 +388,9 @@ int net_ping_run(const struct net_ping_target *target,
 
         bool ping_wait_logged = false;
         for (uint32_t waited = 0u; waited < 2000u; waited += 10u) {
+#ifndef CONFIG_VIRTIO_NET_ENABLE_IRQS
             dev->recv(dev);
+#endif
             if (ctx->state.ping_completed &&
                 ctx->state.ping_sequence_observed == ctx->state.ping_sequence_issued &&
                 ctx->state.ping_response_cycles != 0u) {

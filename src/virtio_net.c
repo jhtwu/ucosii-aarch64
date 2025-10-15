@@ -136,6 +136,9 @@ static int virtio_net_init_queue(struct virtio_net_dev *dev, int queue_num,
             (*avail)->ring[i] = i;
         }
         (*avail)->idx = queue_size;
+
+        /* Kick the device so it notices newly available RX buffers */
+        virtio_mmio_write(dev, VIRTIO_MMIO_QUEUE_NOTIFY, queue_num);
     }
 
     return 0;
