@@ -56,6 +56,7 @@ QEMU_WAN_MAC    = 52:54:00:65:43:21
 QEMU_USER_NET_FLAGS = -netdev user,id=net0 -device virtio-net-device,netdev=net0
 QEMU_BRIDGE_FLAGS = -netdev tap,id=net0,ifname=$(QEMU_BRIDGE_TAP),script=no,downscript=no -device virtio-net-device,netdev=net0,bus=virtio-mmio-bus.0,mac=$(QEMU_BRIDGE_MAC)
 QEMU_WAN_BRIDGE_FLAGS = -netdev tap,id=net0,ifname=$(QEMU_WAN_TAP),script=no,downscript=no -device virtio-net-device,netdev=net0,bus=virtio-mmio-bus.0,mac=$(QEMU_WAN_MAC)
+QEMU_RUN_TIMEOUT ?= 10
 NET_MODE ?= bridge
 
 # ======================================================================================
@@ -74,23 +75,25 @@ CORE_OBJECTS = $(filter-out $(APP_OBJECT), $(OBJECTS_ALL))
 TESTDIR            = test
 TEST_OBJDIR        = test_build
 TEST_SUPPORT       = test_support
-TEST_NAMES         = test_context_timer test_network_ping test_network_ping_wan test_udp_flood
+TEST_NAMES         = test_context_timer test_network_init test_network_ping test_network_ping_wan test_udp_flood
 TEST_SUPPORT_OBJ   = $(addprefix $(TEST_OBJDIR)/,$(addsuffix .o,$(TEST_SUPPORT)))
 TEST_PROGRAM_OBJS  = $(addprefix $(TEST_OBJDIR)/,$(addsuffix .o,$(TEST_NAMES)))
 TEST_CONTEXT_NAME  = test_context_timer
 TEST_PING_NAME     = test_network_ping
 TEST_PING_WAN_NAME = test_network_ping_wan
+TEST_NET_INIT_NAME = test_network_init
 TEST_BINDIR        = test_bin
 TEST_CONTEXT_BIN   = $(TEST_BINDIR)/$(TEST_CONTEXT_NAME).elf
 TEST_PING_BIN      = $(TEST_BINDIR)/$(TEST_PING_NAME).elf
 TEST_PING_WAN_BIN  = $(TEST_BINDIR)/$(TEST_PING_WAN_NAME).elf
+TEST_NET_INIT_BIN  = $(TEST_BINDIR)/$(TEST_NET_INIT_NAME).elf
 TEST_CFLAGS        = $(filter-out -fstack-usage,$(CFLAGS))
 rm           = rm -f
 
 # ======================================================================================
 # Phony Targets / 虛擬目標宣告
 # ======================================================================================
-.PHONY: all clean remove run run-kvm qemu qemu_gdb qemu-gdb gdb dqemu setup-network help test test-context test-ping test-ping-wan test-dual
+.PHONY: all clean remove run run-kvm qemu qemu_gdb qemu-gdb gdb dqemu setup-network help test test-context test-net-init test-ping test-ping-wan test-dual
 
 # ======================================================================================
 # Default Build Target / 預設建置目標
@@ -101,7 +104,7 @@ all: $(BINDIR)/$(TARGET)
 # Build Rules / 建置規則
 # ======================================================================================
 
-$(BINDIR)/$(TARGET): remove $(OBJECTS_ALL)
+$(BINDIR)/$(TARGET): $(OBJECTS_ALL)
 	@mkdir -p $(@D)
 	@$(LINKER) $@ $(LFLAGS) $(OBJECTS_ALL)
 	@echo "Linking complete!"
@@ -188,14 +191,14 @@ dqemu: $(BINDIR)/$(TARGET)
 # Utility Targets / 其他常用目標
 # ======================================================================================
 
-test: test-context test-ping test-ping-wan test-udp test-dual
+test: test-context test-ping test-ping-wan test-dual
 
 test-context: $(TEST_CONTEXT_BIN)
 	@echo "========================================="
 	@echo "Running Test Case 1: Context Switch & Timer"
 	@echo "========================================="
 	@status=0; \
-	output=$$(timeout --foreground 20s $(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) -kernel $(TEST_CONTEXT_BIN) 2>&1) || status=$$?; \
+	output=$$(timeout --foreground $(QEMU_RUN_TIMEOUT)s $(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) -kernel $(TEST_CONTEXT_BIN) 2>&1) || status=$$?; \
 	echo "$$output"; \
 	if echo "$$output" | grep -q "\[PASS\]"; then \
 		echo ""; echo "✓ TEST PASSED"; exit 0; \
@@ -207,6 +210,25 @@ test-context: $(TEST_CONTEXT_BIN)
 		exit $$status; \
 	fi
 
+test-net-init: $(TEST_NET_INIT_BIN)
+	@echo "========================================="
+	@echo "Running Test Case: VirtIO Network Init"
+	@echo "========================================="
+	@for i in 1 2 3 4 5 6 7 8 9 10; do \
+		printf "\n--- Run %d ---\n" "$$i"; \
+		status=0; \
+		output=$$(timeout --foreground $(QEMU_RUN_TIMEOUT)s $(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) -netdev user,id=net0 -device virtio-net-device,netdev=net0,bus=virtio-mmio-bus.0,mac=$(QEMU_BRIDGE_MAC) -kernel $(TEST_NET_INIT_BIN) 2>&1) || status=$$?; \
+		echo "$$output"; \
+		if echo "$$output" | grep -q "\[PASS\]"; then \
+			printf "Run %d: PASS\n" "$$i"; \
+		else \
+			printf "Run %d: FAIL\n" "$$i"; \
+			exit 1; \
+		fi; \
+		done; \
+	echo ""; \
+	echo "✓ ALL RUNS PASSED";
+
 test-ping: $(TEST_PING_BIN)
 	@echo "========================================="
 	@echo "Running Test Case 2: Network Ping"
@@ -217,7 +239,7 @@ test-ping: $(TEST_PING_BIN)
 		exit 0; \
 	fi; \
 	status=0; \
-	output=$$(timeout --foreground 15s $(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) $(QEMU_BRIDGE_FLAGS) -kernel $(TEST_PING_BIN) 2>&1) || status=$$?; \
+	output=$$(timeout --foreground $(QEMU_RUN_TIMEOUT)s $(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) $(QEMU_BRIDGE_FLAGS) -kernel $(TEST_PING_BIN) 2>&1) || status=$$?; \
 	if echo "$$output" | grep -qi "could not open /dev/net/tun"; then \
 		echo "[SKIP] Access to /dev/net/tun denied."; \
 		echo "      Options: run 'sudo setcap cap_net_admin+ep $$(command -v $(QEMU))'"; \
@@ -252,7 +274,7 @@ test-ping-wan: $(TEST_PING_WAN_BIN)
 		exit 0; \
 	fi; \
 	status=0; \
-	output=$$(timeout --foreground 15s $(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) $(QEMU_WAN_BRIDGE_FLAGS) -kernel $(TEST_PING_WAN_BIN) 2>&1) || status=$$?; \
+	output=$$(timeout --foreground $(QEMU_RUN_TIMEOUT)s $(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) $(QEMU_WAN_BRIDGE_FLAGS) -kernel $(TEST_PING_WAN_BIN) 2>&1) || status=$$?; \
 	if echo "$$output" | grep -qi "could not open /dev/net/tun"; then \
 		echo "[SKIP] Access to /dev/net/tun denied."; \
 		echo "      Options: run 'sudo setcap cap_net_admin+ep $$(command -v $(QEMU))'"; \
@@ -296,12 +318,23 @@ test-dual: $(BINDIR)/$(TARGET)
 	else \
 		echo "brctl not available; skipping bridge status output."; \
 	fi
-	timeout --foreground 60s $(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) \
+	status=0; \
+	output=$$(timeout --foreground $(QEMU_RUN_TIMEOUT)s $(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) \
 		-netdev tap,id=net0,ifname=$(QEMU_BRIDGE_TAP),script=no,downscript=no \
 		-device virtio-net-device,netdev=net0,bus=virtio-mmio-bus.0,mac=$(QEMU_BRIDGE_MAC) \
 		-netdev tap,id=net1,ifname=$(QEMU_WAN_TAP),script=no,downscript=no \
 		-device virtio-net-device,netdev=net1,bus=virtio-mmio-bus.1,mac=$(QEMU_WAN_MAC) \
-		-kernel $(QEMU_IMAGE)
+		-kernel $(QEMU_IMAGE) 2>&1) || status=$$?; \
+	echo "$$output"; \
+    if echo "$$output" | grep -q "\[PASS\]"; then \
+        echo ""; echo "✓ TEST PASSED"; exit 0; \
+    elif echo "$$output" | grep -q "\[FAIL\]"; then \
+        echo ""; echo "✗ TEST FAILED"; exit 1; \
+	elif [ $$status -eq 124 ]; then \
+		echo ""; echo "⚠ TEST TIMED OUT"; exit 1; \
+	else \
+		exit $$status; \
+	fi
 
 test-udp: $(TEST_BINDIR)/test_udp_flood.elf
 	@echo "========================================="
@@ -313,7 +346,7 @@ test-udp: $(TEST_BINDIR)/test_udp_flood.elf
 		exit 0; \
 	fi; \
 	status=0; \
-	output=$$(timeout --foreground 15s $(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) $(QEMU_BRIDGE_FLAGS) -kernel $(TEST_BINDIR)/test_udp_flood.elf 2>&1) || status=$$?; \
+	output=$$(timeout --foreground $(QEMU_RUN_TIMEOUT)s $(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) $(QEMU_BRIDGE_FLAGS) -kernel $(TEST_BINDIR)/test_udp_flood.elf 2>&1) || status=$$?; \
 	if echo "$$output" | grep -qi "could not open /dev/net/tun"; then \
 		echo "[SKIP] Access to /dev/net/tun denied."; \
 		echo "      Options: run 'sudo setcap cap_net_admin+ep $$(command -v $(QEMU))'"; \
@@ -374,10 +407,11 @@ help:
 # Clean up intermediate files / 清除暫存檔案
 clean:
 	@$(rm) $(OBJECTS_ALL)
-	@$(rm) -rf $(BINDIR)/*
-	@$(rm) -rf $(OBJDIR)
-	@rm -rf $(TEST_OBJDIR)
+	@rm -rf $(BINDIR)/*
 	@rm -rf $(TEST_BINDIR)
+	@rm -rf $(TEST_OBJDIR)
+	@rm -f $(OBJDIR)/*.o $(OBJDIR)/*.su
+	@mkdir -p $(OBJDIR) $(BINDIR) $(TEST_OBJDIR) $(TEST_BINDIR)
 	@$(rm) os.list
 	@echo "Cleanup complete!"
 

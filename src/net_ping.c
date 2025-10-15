@@ -106,6 +106,20 @@ static bool net_ping_mac_is_zero(const uint8_t mac[6])
     return true;
 }
 
+static void net_ping_print_mac(const char *label, const uint8_t mac[6])
+{
+    printf("[DEBUG] %s %02X:%02X:%02X:%02X:%02X:%02X\n",
+           label,
+           mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+}
+
+static void net_ping_print_ip(const char *label, const uint8_t ip[4])
+{
+    printf("[DEBUG] %s %u.%u.%u.%u\n",
+           label,
+           ip[0], ip[1], ip[2], ip[3]);
+}
+
 static void net_ping_build_arp_request(struct net_ping_context *ctx,
                                        uint8_t *frame,
                                        size_t *length)
@@ -225,6 +239,9 @@ void test_net_on_frame(uint8_t *pkt, int len)
             }
             ctx->state.arp_completed = true;
             ctx->state.arp_response_cycles = net_ping_read_cycles();
+            printf("[DEBUG] Received ARP reply from %u.%u.%u.%u\n",
+                   pkt[28], pkt[29], pkt[30], pkt[31]);
+            net_ping_print_mac("Peer MAC:", &pkt[22]);
         }
         return;
     }
@@ -251,6 +268,7 @@ void test_net_on_frame(uint8_t *pkt, int len)
                     ctx->state.ping_completed = true;
                     ctx->state.ping_sequence_observed = seq;
                     ctx->state.ping_response_cycles = net_ping_read_cycles();
+                    printf("[DEBUG] ICMP echo reply seq=%u received\n", (unsigned)seq);
                 }
             }
         }
@@ -302,6 +320,9 @@ int net_ping_run(const struct net_ping_target *target,
     memcpy(ctx->local_mac, dev->enetaddr, sizeof(ctx->local_mac));
 
     printf("[TEST] %s ping start\n", (target->name != NULL) ? target->name : "Network");
+    net_ping_print_mac("Local MAC:", ctx->local_mac);
+    net_ping_print_ip("Guest IP:", ctx->target.guest_ip);
+    net_ping_print_ip("Target IP:", ctx->target.host_ip);
 
     g_active_ctx = ctx;
 
@@ -315,10 +336,18 @@ int net_ping_run(const struct net_ping_target *target,
 
     net_ping_build_arp_request(ctx, frame, &frame_len);
     uint64_t arp_start_cycles = net_ping_read_cycles();
-    dev->send(dev, frame, (int)frame_len);
+    printf("[DEBUG] Sending ARP request (len=%u)\n", (unsigned)frame_len);
+    if (dev->send(dev, frame, (int)frame_len) < 0) {
+        printf("[ERROR] Failed to transmit ARP request\n");
+    }
 
+    bool arp_wait_logged = false;
     for (uint32_t waited = 0u; waited < 2000u && !ctx->state.arp_completed; waited += 10u) {
         dev->recv(dev);
+        if (!ctx->state.arp_completed && !arp_wait_logged && waited >= 500u) {
+            printf("[DEBUG] Still waiting for ARP reply... (%u ms elapsed)\n", waited);
+            arp_wait_logged = true;
+        }
         OSTimeDlyHMSM(0u, 0u, 0u, 10u);
     }
 
@@ -330,9 +359,11 @@ int net_ping_run(const struct net_ping_target *target,
 
     if (net_ping_mac_is_zero((const uint8_t *)ctx->state.host_mac)) {
         printf("[FAIL] ARP response contained invalid MAC\n");
+        net_ping_print_mac("Peer MAC (invalid):", ctx->state.host_mac);
         g_active_ctx = NULL;
         return -1;
     }
+    net_ping_print_mac("Resolved peer MAC:", ctx->state.host_mac);
 
     ctx->stats.arp_latency_us = net_ping_cycles_to_us(arp_start_cycles, ctx->state.arp_response_cycles);
 
@@ -345,8 +376,15 @@ int net_ping_run(const struct net_ping_target *target,
 
         net_ping_build_icmp_request(ctx, frame, &frame_len, ctx->state.ping_sequence_issued);
         uint64_t ping_start_cycles = net_ping_read_cycles();
-        dev->send(dev, frame, (int)frame_len);
+        printf("[DEBUG] Sending ICMP echo request seq=%u (len=%u)\n",
+               (unsigned)ctx->state.ping_sequence_issued,
+               (unsigned)frame_len);
+        if (dev->send(dev, frame, (int)frame_len) < 0) {
+            printf("[ERROR] Failed to transmit ICMP request seq=%u\n",
+                   (unsigned)ctx->state.ping_sequence_issued);
+        }
 
+        bool ping_wait_logged = false;
         for (uint32_t waited = 0u; waited < 2000u; waited += 10u) {
             dev->recv(dev);
             if (ctx->state.ping_completed &&
@@ -354,7 +392,16 @@ int net_ping_run(const struct net_ping_target *target,
                 ctx->state.ping_response_cycles != 0u) {
                 ping_latencies[successful_pings++] =
                     net_ping_cycles_to_us(ping_start_cycles, ctx->state.ping_response_cycles);
+                printf("[DEBUG] ICMP echo reply seq=%u latency=%u us\n",
+                       (unsigned)ctx->state.ping_sequence_observed,
+                       ping_latencies[successful_pings - 1u]);
                 break;
+            }
+            if (!ctx->state.ping_completed && !ping_wait_logged && waited >= 500u) {
+                printf("[DEBUG] Still waiting for ICMP reply seq=%u... (%u ms elapsed)\n",
+                       (unsigned)ctx->state.ping_sequence_issued,
+                       waited);
+                ping_wait_logged = true;
             }
             OSTimeDlyHMSM(0u, 0u, 0u, 10u);
         }
@@ -364,6 +411,7 @@ int net_ping_run(const struct net_ping_target *target,
                    ctx->stats.arp_latency_us,
                    (unsigned)ctx->state.ping_sequence_issued);
             printf("[FAIL] ICMP echo reply missing\n");
+            net_ping_print_mac("Peer MAC (cached):", ctx->state.host_mac);
             g_active_ctx = NULL;
             return -1;
         }
@@ -402,6 +450,7 @@ int net_ping_run(const struct net_ping_target *target,
            ctx->stats.ping_count);
     printf("[PASS] Ping response statistics captured\n");
 
+#ifdef CONFIG_VIRTIO_NET_ENABLE_IRQS
     if (ctx->virt_dev != NULL) {
         uint32_t irq_delta = ctx->virt_dev->irq_count - ctx->irq_base;
         uint32_t rx_delta = ctx->virt_dev->rx_packet_count - ctx->rx_base;
@@ -412,6 +461,7 @@ int net_ping_run(const struct net_ping_target *target,
             return -1;
         }
     }
+#endif
 
     if (stats != NULL) {
         *stats = ctx->stats;

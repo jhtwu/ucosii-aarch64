@@ -6,6 +6,7 @@
 
 #include <config.h>
 #include <asm/types.h>
+#include <stdint.h>
 #include <malloc.h>
 #include <net.h>
 #include <asm/system.h>
@@ -33,6 +34,24 @@ static uchar net_pkt_buf[(PKTBUFSRX+1) * PKTSIZE_ALIGN + PKTALIGN];
 static uchar net_rx_packets2[1600];
 extern uchar *net_rx_packets[PKTBUFSRX];
 
+#define VIRTIO_QUEUE_ALIGN 4096u
+
+static void *virtio_alloc_queue_mem(size_t size)
+{
+    void *base;
+    uintptr_t aligned;
+
+    base = malloc(size + VIRTIO_QUEUE_ALIGN - 1u);
+    if (!base) {
+        return NULL;
+    }
+
+    aligned = (uintptr_t)base;
+    aligned = (aligned + (VIRTIO_QUEUE_ALIGN - 1u)) & ~(uintptr_t)(VIRTIO_QUEUE_ALIGN - 1u);
+
+    return (void *)aligned;
+}
+
 /* Helper function to align addresses */
 static inline u64 virt_to_phys(void *ptr)
 {
@@ -52,6 +71,9 @@ static int virtio_net_init_queue(struct virtio_net_dev *dev, int queue_num,
     /* Select queue */
     virtio_mmio_write(dev, VIRTIO_MMIO_QUEUE_SEL, queue_num);
 
+    /* Ensure queue is disabled before configuration */
+    virtio_mmio_write(dev, VIRTIO_MMIO_QUEUE_READY, 0);
+
     /* Get queue size */
     queue_size = virtio_mmio_read(dev, VIRTIO_MMIO_QUEUE_NUM_MAX);
     if (queue_size == 0) {
@@ -66,9 +88,9 @@ static int virtio_net_init_queue(struct virtio_net_dev *dev, int queue_num,
     printf(DRIVERNAME ": Queue %d size: %d\n", queue_num, queue_size);
 
     /* Allocate queue structures */
-    *desc = (struct vring_desc *)malloc(sizeof(struct vring_desc) * queue_size);
-    *avail = (struct vring_avail *)malloc(sizeof(struct vring_avail) + sizeof(u16) * queue_size);
-    *used = (struct vring_used *)malloc(sizeof(struct vring_used) + sizeof(struct vring_used_elem) * queue_size);
+    *desc = (struct vring_desc *)virtio_alloc_queue_mem(sizeof(struct vring_desc) * queue_size);
+    *avail = (struct vring_avail *)virtio_alloc_queue_mem(sizeof(struct vring_avail) + sizeof(u16) * queue_size);
+    *used = (struct vring_used *)virtio_alloc_queue_mem(sizeof(struct vring_used) + sizeof(struct vring_used_elem) * queue_size);
 
     if (!*desc || !*avail || !*used) {
         printf(DRIVERNAME ": Failed to allocate queue structures\n");
@@ -157,7 +179,7 @@ int BSP_OS_VirtioNetHandler(unsigned int cpu_id)
 static int virtio_net_init_device(struct virtio_net_dev *dev)
 {
     u32 magic, version, device_id, vendor_id;
-    u32 features, status;
+    u32 status;
     struct virtio_net_config *config;
     int i;
 
@@ -253,16 +275,36 @@ static int virtio_net_init_device(struct virtio_net_dev *dev)
         virtio_mmio_write(dev, VIRTIO_MMIO_GUEST_PAGE_SIZE, 4096);
     }
 
-    /* Read device features (selector for lower 32 bits) */
+    /* Read device features (both lower and upper 32 bits) */
     printf(DRIVERNAME ": Step 4 - Reading features...\n");
     virtio_mmio_write(dev, VIRTIO_MMIO_DEVICE_FEATURES_SEL, 0);
-    features = virtio_mmio_read(dev, VIRTIO_MMIO_DEVICE_FEATURES);
-    printf(DRIVERNAME ": Features[31:0]: 0x%x\n", features);
+    u32 features_lo = virtio_mmio_read(dev, VIRTIO_MMIO_DEVICE_FEATURES);
+    virtio_mmio_write(dev, VIRTIO_MMIO_DEVICE_FEATURES_SEL, 1);
+    u32 features_hi = virtio_mmio_read(dev, VIRTIO_MMIO_DEVICE_FEATURES);
+    printf(DRIVERNAME ": Features[31:0]=0x%x, [63:32]=0x%x\n", features_lo, features_hi);
+
+    u32 driver_features_lo = 0;
+    u32 driver_features_hi = 0;
+    if (features_lo & (1u << VIRTIO_NET_F_MAC)) {
+        driver_features_lo |= (1u << VIRTIO_NET_F_MAC);
+        printf(DRIVERNAME ": Negotiating VIRTIO_NET_F_MAC\n");
+    } else {
+        printf(DRIVERNAME ": WARNING: Device does not advertise VIRTIO_NET_F_MAC\n");
+    }
+    if (features_hi & (1u << (VIRTIO_F_VERSION_1 - 32))) {
+        driver_features_hi |= (1u << (VIRTIO_F_VERSION_1 - 32));
+        printf(DRIVERNAME ": Negotiating VIRTIO_F_VERSION_1\n");
+    } else {
+        printf(DRIVERNAME ": ERROR: Device does not advertise VIRTIO_F_VERSION_1, cannot continue\n");
+        return -1;
+    }
 
     /* Negotiate features - write 0 to accept no features (minimal driver) */
     printf(DRIVERNAME ": Step 5 - Negotiating features (writing 0 for minimal driver)...\n");
     virtio_mmio_write(dev, VIRTIO_MMIO_DRIVER_FEATURES_SEL, 0);
-    virtio_mmio_write(dev, VIRTIO_MMIO_DRIVER_FEATURES, 0);
+    virtio_mmio_write(dev, VIRTIO_MMIO_DRIVER_FEATURES, driver_features_lo);
+    virtio_mmio_write(dev, VIRTIO_MMIO_DRIVER_FEATURES_SEL, 1);
+    virtio_mmio_write(dev, VIRTIO_MMIO_DRIVER_FEATURES, driver_features_hi);
     printf(DRIVERNAME ": Step 5 - Features written\n");
 
     /* Set FEATURES_OK - write ALL status bits cumulatively */
@@ -320,11 +362,6 @@ static int virtio_net_init_device(struct virtio_net_dev *dev)
     dev->rx_last_used = 0;
     dev->tx_last_used = 0;
 
-    /* Setup GICv3 interrupt */
-    printf(DRIVERNAME ": Setting up GICv3 IRQ %d\n", dev->irq);
-    BSP_IntVectSet(dev->irq, 0u, 0u, BSP_OS_VirtioNetHandler);
-    BSP_IntSrcEn(dev->irq);
-
     /* Set DRIVER_OK status - write ALL status bits cumulatively */
     printf(DRIVERNAME ": Step 11 - Setting DRIVER_OK...\n");
     virtio_mmio_write(dev, VIRTIO_MMIO_STATUS,
@@ -334,6 +371,17 @@ static int virtio_net_init_device(struct virtio_net_dev *dev)
     /* Verify DRIVER_OK was set */
     status = virtio_mmio_read(dev, VIRTIO_MMIO_STATUS);
     printf(DRIVERNAME ": Status after DRIVER_OK: 0x%x\n", status);
+
+    printf(DRIVERNAME ": Step 12 - Preparing interrupt wiring\n");
+
+#ifdef CONFIG_VIRTIO_NET_ENABLE_IRQS
+    printf(DRIVERNAME ": Setting up GICv3 IRQ %d\n", dev->irq);
+    BSP_IntVectSet(dev->irq, 0u, 0u, BSP_OS_VirtioNetHandler);
+    BSP_IntSrcEn(dev->irq);
+    printf(DRIVERNAME ": Step 13 - Interrupt hook complete\n");
+#else
+    printf(DRIVERNAME ": Skipping IRQ wiring (polling mode)\n");
+#endif
 
     printf(DRIVERNAME ": Initialization complete\n");
 
@@ -367,6 +415,7 @@ int virtio_net_send(struct eth_device *eth_dev, void *packet, int length)
     /* Prepare virtio_net header */
     hdr = (struct virtio_net_hdr *)buf;
     memset(hdr, 0, sizeof(struct virtio_net_hdr));
+    hdr->num_buffers = 0;
 
     /* Copy packet data */
     memcpy(buf + sizeof(struct virtio_net_hdr), packet, length);
@@ -463,31 +512,29 @@ static int virtio_net_scan_devices(unsigned long *found_addrs, u32 *found_irqs, 
     for (int i = 0; i < (int)(sizeof(addrs) / sizeof(addrs[0])); ++i) {
         u32 magic = *(volatile u32*)(addrs[i] + VIRTIO_MMIO_MAGIC_VALUE);
 
-        if (magic == 0x74726976) {  /* 'virt' */
-            u32 version = *(volatile u32*)(addrs[i] + VIRTIO_MMIO_VERSION);
-            u32 device_id = *(volatile u32*)(addrs[i] + VIRTIO_MMIO_DEVICE_ID);
-            u32 vendor_id = *(volatile u32*)(addrs[i] + VIRTIO_MMIO_VENDOR_ID);
+        if (magic != 0x74726976) {  /* 'virt' */
+            continue;
+        }
 
-            printf(DRIVERNAME ": Found VirtIO v%d at 0x%lx, DevID=%d, VendorID=0x%x\n",
-                   version, addrs[i], device_id, vendor_id);
+        u32 version = *(volatile u32*)(addrs[i] + VIRTIO_MMIO_VERSION);
+        u32 device_id = *(volatile u32*)(addrs[i] + VIRTIO_MMIO_DEVICE_ID);
+        u32 vendor_id = *(volatile u32*)(addrs[i] + VIRTIO_MMIO_VENDOR_ID);
 
-            if (found < max_devices) {
-                if (device_id == VIRTIO_ID_NET) {
-                    found_addrs[found] = addrs[i];
-                    found_irqs[found] = irqs[i];
-                    ++found;
-                } else if (device_id == 0 && version >= 1) {
-                    u32 mac_check = *(volatile u32*)(addrs[i] + VIRTIO_MMIO_CONFIG);
-                    printf(DRIVERNAME ": Config MAC check: 0x%x\n", mac_check);
-                    found_addrs[found] = addrs[i];
-                    found_irqs[found] = irqs[i];
-                    ++found;
-                }
-            }
+        printf(DRIVERNAME ": Found VirtIO v%d at 0x%lx, DevID=%d, VendorID=0x%x\n",
+               version, addrs[i], device_id, vendor_id);
 
-            if (found >= max_devices) {
-                break;
-            }
+        if (device_id != VIRTIO_ID_NET) {
+            continue;
+        }
+
+        if (found < max_devices) {
+            found_addrs[found] = addrs[i];
+            found_irqs[found] = irqs[i];
+            ++found;
+        }
+
+        if (found >= max_devices) {
+            break;
         }
     }
 
@@ -527,7 +574,9 @@ static int virtio_net_add_device(unsigned long base_addr, u32 irq)
     dev->eth_dev.iobase = base_addr;
     sprintf(dev->eth_dev.name, "%s", DRIVERNAME);
 
+    printf(DRIVERNAME ": Registering eth_device structure\n");
     eth_register(&dev->eth_dev);
+    printf(DRIVERNAME ": Registering network interface\n");
     net_register_iface(&dev->eth_dev);
 
     if (virtio_net_device_count == 0) {

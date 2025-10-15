@@ -159,8 +159,6 @@ static void  AppTaskStart (void *p_arg)
                     0,
                     OS_TASK_OPT_STK_CLR | OS_TASK_OPT_STK_CHK);
 
-    BSP_OS_TmrTickInit(1000);
-
     while (DEF_TRUE) {
         uart_puts("Task 1: tick\n");
         OSTimeDlyHMSM(0, 0, 1, 0);
@@ -217,6 +215,8 @@ static void  AppTaskNetwork (void *p_arg)
     }
 
     uart_puts("Network driver initialized successfully!\n");
+
+    BSP_OS_TmrTickInit(1000);
 
     for (size_t i = 0u; i < (sizeof(app_ping_targets) / sizeof(app_ping_targets[0])); ++i) {
         if (net_ping_run(&app_ping_targets[i], 4u, NULL) != 0) {

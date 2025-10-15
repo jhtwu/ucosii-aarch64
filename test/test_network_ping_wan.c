@@ -30,8 +30,6 @@ static void net_test_task(void *p_arg)
 
     (void)p_arg;
 
-    BSP_OS_TmrTickInit(1000u);
-
     printf("[BOOT] Starting scheduler\n\n");
 
     err = eth_init();
@@ -39,6 +37,8 @@ static void net_test_task(void *p_arg)
         printf("[FAIL] eth_init() failed\n");
         goto wait_forever;
     }
+
+    BSP_OS_TmrTickInit(1000u);
 
     if (net_ping_run(&wan_target, 4u, NULL) == 0) {
         printf("[PASS] WAN ping test completed\n");

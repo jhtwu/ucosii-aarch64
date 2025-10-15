@@ -51,6 +51,9 @@
 #define VIRTIO_ID_NET                   1
 
 /* VirtIO Feature Bits */
+#define VIRTIO_F_VERSION_1              32
+
+/* VirtIO Feature Bits */
 #define VIRTIO_NET_F_CSUM               0   /* Host handles pkts w/ partial csum */
 #define VIRTIO_NET_F_GUEST_CSUM         1   /* Guest handles pkts w/ partial csum */
 #define VIRTIO_NET_F_MAC                5   /* Host has given MAC address. */
@@ -101,6 +104,7 @@ struct virtio_net_hdr {
     u16 gso_size;
     u16 csum_start;
     u16 csum_offset;
+    u16 num_buffers;
 } __attribute__((packed));
 
 /* Queue sizes */
@@ -145,15 +149,17 @@ static inline u32 virtio_mmio_read(struct virtio_net_dev *dev, u32 offset)
 {
     u32 val;
     val = *(volatile u32*)(dev->iobase + offset);
-    __asm__ volatile("dsb sy" ::: "memory");  /* Data Synchronization Barrier */
+    __asm__ volatile("dsb sy" ::: "memory");  /* Ensure read has completed */
+    __asm__ volatile("isb" ::: "memory");     /* Synchronise context */
     return val;
 }
 
 static inline void virtio_mmio_write(struct virtio_net_dev *dev, u32 offset, u32 val)
 {
-    __asm__ volatile("dsb sy" ::: "memory");  /* Data Synchronization Barrier */
+    __asm__ volatile("dsb sy" ::: "memory");  /* Ensure prior memory ops complete */
     *(volatile u32*)(dev->iobase + offset) = val;
-    __asm__ volatile("dsb sy" ::: "memory");  /* Ensure write completes */
+    __asm__ volatile("dsb sy" ::: "memory");  /* Ensure write commits */
+    __asm__ volatile("isb" ::: "memory");     /* Synchronise context */
 }
 
 /* Function declarations */
@@ -165,5 +171,8 @@ void virtio_net_halt(struct eth_device *dev);
 extern struct virtio_net_dev *virtio_net_device;
 struct virtio_net_dev *virtio_net_get_device(size_t index);
 size_t virtio_net_get_device_count(void);
+
+/* Optional: enable interrupt wiring; tests run in polling mode by default */
+#undef CONFIG_VIRTIO_NET_ENABLE_IRQS
 
 #endif /* _VIRTIO_NET_H_ */
