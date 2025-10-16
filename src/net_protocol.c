@@ -338,7 +338,10 @@ static int net_forward_icmp_with_nat(u8 *pkt, int len, int from_iface_idx)
     u8 dest_ip_for_arp[4];
     if (to_iface_idx == NET_IFACE_WAN) {
         /* Going to WAN - use actual destination IP */
-        memcpy(dest_ip_for_arp, dst_ip_bytes, 4);
+        dest_ip_for_arp[0] = dst_ip_bytes[0];
+        dest_ip_for_arp[1] = dst_ip_bytes[1];
+        dest_ip_for_arp[2] = dst_ip_bytes[2];
+        dest_ip_for_arp[3] = dst_ip_bytes[3];
     } else {
         /* Going to LAN - use translated destination */
         u32 lan_dst = ntohl(ip->ip_dst.s_addr);
@@ -497,7 +500,10 @@ static int net_forward_tcp_with_nat(u8 *pkt, int len, int from_iface_idx)
     u8 dest_ip_for_arp[4];
     if (to_iface_idx == NET_IFACE_WAN) {
         /* Going to WAN - use actual destination IP */
-        memcpy(dest_ip_for_arp, dst_ip_bytes, 4);
+        dest_ip_for_arp[0] = dst_ip_bytes[0];
+        dest_ip_for_arp[1] = dst_ip_bytes[1];
+        dest_ip_for_arp[2] = dst_ip_bytes[2];
+        dest_ip_for_arp[3] = dst_ip_bytes[3];
     } else {
         /* Going to LAN - use translated destination */
         u32 lan_dst = ntohl(ip->ip_dst.s_addr);
@@ -642,7 +648,10 @@ static int net_forward_udp_with_nat(u8 *pkt, int len, int from_iface_idx)
     u8 dest_ip_for_arp[4];
     if (to_iface_idx == NET_IFACE_WAN) {
         /* Going to WAN - use actual destination IP */
-        memcpy(dest_ip_for_arp, dst_ip_bytes, 4);
+        dest_ip_for_arp[0] = dst_ip_bytes[0];
+        dest_ip_for_arp[1] = dst_ip_bytes[1];
+        dest_ip_for_arp[2] = dst_ip_bytes[2];
+        dest_ip_for_arp[3] = dst_ip_bytes[3];
     } else {
         /* Going to LAN - use translated destination */
         u32 lan_dst = ntohl(ip->ip_dst.s_addr);

@@ -31,7 +31,6 @@ static uchar mac[6] = {0x52, 0x54, 0x00, 0x12, 0x34, 0x56};
 
 /* Packet buffers */
 static uchar net_pkt_buf[(PKTBUFSRX+1) * PKTSIZE_ALIGN + PKTALIGN];
-static uchar net_rx_packets2[1600];
 extern uchar *net_rx_packets[PKTBUFSRX];
 
 #define VIRTIO_QUEUE_ALIGN 4096u
@@ -494,8 +493,7 @@ int virtio_net_rx(struct eth_device *eth_dev)
 
         /* Process packet */
         if (pktlen > 0 && pktlen <= PKTSIZE_ALIGN) {
-            memcpy(net_rx_packets2, pkt, pktlen);
-            net_process_received_packet(net_rx_packets2, pktlen);
+            net_process_received_packet(pkt, pktlen);
             dev->rx_packet_count++;
         }
 
