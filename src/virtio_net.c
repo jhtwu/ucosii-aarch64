@@ -399,16 +399,45 @@ int virtio_net_send(struct eth_device *eth_dev, void *packet, int length)
     u8 *buf;
     u16 desc_idx;
     u16 available_slots;
+    u16 in_flight;
 
-    /* Lazy cleanup of completed TX descriptors */
+    /* Check and update completed TX descriptors */
+    u16 old_last_used = dev->tx_last_used;
     dev->tx_last_used = dev->tx_used->idx;
 
-    /* Check available TX descriptors */
-    available_slots = VIRTIO_NET_QUEUE_SIZE -
-                     (dev->tx_avail->idx - dev->tx_last_used);
+    /* Calculate in-flight packets (handle wrap-around with modulo) */
+    in_flight = (dev->tx_avail->idx - dev->tx_last_used) & 0xFFFF;
+    available_slots = VIRTIO_NET_QUEUE_SIZE - in_flight;
 
-    if (available_slots == 0) {
-        return -1;
+    /* If queue is critically full, poll for completions before giving up */
+    if (available_slots < 4) {
+        int retries = 0;
+        while (available_slots < 4 && retries < 100) {
+            /* Force check the used ring again */
+            dev->tx_last_used = dev->tx_used->idx;
+            in_flight = (dev->tx_avail->idx - dev->tx_last_used) & 0xFFFF;
+            available_slots = VIRTIO_NET_QUEUE_SIZE - in_flight;
+
+            if (available_slots >= 4) {
+                break;
+            }
+
+            /* Small delay to let device process */
+            retries++;
+            if (retries % 10 == 0) {
+                /* Manually trigger interrupt check to update used ring */
+                virtio_net_rx(&dev->eth_dev);  /* This also updates tx_last_used */
+            }
+        }
+
+        if (available_slots < 2) {
+            static u32 drop_count = 0;
+            if ((++drop_count % 100) == 1) {
+                printf("[VIRTIO_NET] TX queue full after polling! Dropped %u packets (avail=%u, used=%u, in_flight=%u)\n",
+                       drop_count, dev->tx_avail->idx, dev->tx_last_used, in_flight);
+            }
+            return -1;
+        }
     }
 
     /* Get next available TX buffer */
@@ -477,12 +506,13 @@ int virtio_net_rx(struct eth_device *eth_dev)
         last_used++;
     }
 
-    dev->rx_last_used = last_used;
-
-    /* Notify device of new available buffers */
-    if (last_used != dev->rx_used->idx) {
+    /* Notify device of new available buffers if we recycled any */
+    u16 rx_recycled = last_used - dev->rx_last_used;
+    if (rx_recycled > 0) {
         virtio_mmio_write(dev, VIRTIO_MMIO_QUEUE_NOTIFY, VIRTIO_NET_RX_QUEUE);
     }
+
+    dev->rx_last_used = last_used;
 
     return 0;
 }
@@ -526,7 +556,8 @@ static int virtio_net_scan_devices(unsigned long *found_addrs, u32 *found_irqs, 
         printf(DRIVERNAME ": Found VirtIO v%d at 0x%lx, DevID=%d, VendorID=0x%x\n",
                version, addrs[i], device_id, vendor_id);
 
-        if (device_id != VIRTIO_ID_NET) {
+        /* Accept both VIRTIO_ID_NET (1) and legacy virtio-net-device (0) */
+        if (device_id != VIRTIO_ID_NET && device_id != 0) {
             continue;
         }
 

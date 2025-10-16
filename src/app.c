@@ -52,6 +52,10 @@
 #include  <stddef.h>
 #include  "virtio_net.h"
 #include  "net_ping.h"
+#include  "nat.h"
+
+/* Enable NAT functionality - Full NAT Router */
+#define ENABLE_NAT 1
 
 /*
 *********************************************************************************************************
@@ -180,6 +184,7 @@ static void  AppTaskPrint (void *p_arg)
 extern int eth_init(void);
 extern struct eth_device *ethdev;
 extern struct virtio_net_dev *virtio_net_device;
+extern void net_enable_nat(void);
 
 static const struct net_ping_target app_ping_targets[] = {
     {
@@ -218,6 +223,18 @@ static void  AppTaskNetwork (void *p_arg)
 
     BSP_OS_TmrTickInit(1000);
 
+#if ENABLE_NAT
+    /* Enable NAT - Full Router Mode */
+    uart_puts("\n========================================\n");
+    uart_puts("NAT Router Mode\n");
+    uart_puts("========================================\n");
+    uart_puts("[NAT] Initializing NAT router...\n");
+    net_enable_nat();
+    uart_puts("[NAT] NAT router enabled for ICMP/TCP/UDP\n");
+    uart_puts("[INFO] LAN: 192.168.1.1/24 -> WAN: 10.3.5.99\n");
+    uart_puts("[INFO] Ready to forward traffic from LAN to WAN\n\n");
+#endif
+
     for (size_t i = 0u; i < (sizeof(app_ping_targets) / sizeof(app_ping_targets[0])); ++i) {
         if (net_ping_run(&app_ping_targets[i], 4u, NULL) != 0) {
             printf("[FAIL] %s ping test encountered an error\n",
@@ -228,7 +245,17 @@ static void  AppTaskNetwork (void *p_arg)
         }
     }
 
-    uart_puts("Network ping diagnostics completed. Entering idle loop.\n");
+#if ENABLE_NAT
+    /* Print initial NAT statistics */
+    uart_puts("\n========================================\n");
+    uart_puts("NAT Statistics After Initialization\n");
+    uart_puts("========================================\n");
+    nat_print_table();
+    uart_puts("\n[INFO] NAT router is running\n");
+#endif
+
+    uart_puts("Network initialization completed.\n");
+    uart_puts("NAT router is ready to forward traffic.\n");
 
     while (DEF_TRUE) {
         OSTimeDlyHMSM(0, 0, 5, 0);
