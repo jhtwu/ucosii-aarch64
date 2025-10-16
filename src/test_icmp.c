@@ -1,4 +1,4 @@
-#include "smc911x.h"
+#include <asm/types.h>
 #include <net.h>
 #include "includes.h"
 #include "virtio_net.h"
@@ -21,7 +21,7 @@ char buf[600]={0xff,0xff,0xff,0xff,0xff,0xff,0x52,0x54,0x00,0x12,0x34,0x56,0x08,
 void send_icmp()
 {
 	int i=0;
-	struct eth_device *dev;
+	struct eth_device *dev = NULL;
 
 #ifdef CONFIG_VIRTIO_NET
 	extern struct virtio_net_dev *virtio_net_device;
@@ -30,7 +30,7 @@ void send_icmp()
 	} else
 #endif
 	{
-		dev = ethdev;
+		dev = eth_get_dev();
 	}
 
 	printf(PURPLE "--------------> Sending ARP request to 192.168.1.103! dev at %p\n" NONE, dev);

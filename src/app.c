@@ -182,7 +182,6 @@ static void  AppTaskPrint (void *p_arg)
 }
 
 extern int eth_init(void);
-extern struct eth_device *ethdev;
 extern struct virtio_net_dev *virtio_net_device;
 extern void net_enable_nat(void);
 

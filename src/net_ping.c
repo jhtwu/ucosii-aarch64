@@ -9,7 +9,6 @@
 
 #define NET_PING_MAX_ITERATIONS 16u
 
-extern struct eth_device *ethdev;
 extern struct virtio_net_dev *virtio_net_device;
 
 struct net_ping_state {
@@ -304,7 +303,7 @@ int net_ping_run(const struct net_ping_target *target,
 #endif
 
     if (dev == NULL) {
-        dev = ethdev;
+        dev = eth_get_dev();
     }
 
     if (dev == NULL || dev->send == NULL || dev->recv == NULL) {

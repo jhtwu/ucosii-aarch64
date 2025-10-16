@@ -1,5 +1,4 @@
 
-#include "smc911x.h"
 #include "virtio_net.h"
 #include <net.h>
 
@@ -296,8 +295,8 @@ int eth_init()
 	printf("Initializing VirtIO Net driver...\n");
 	rc = virtio_net_initialize(CONFIG_VIRTIO_NET_BASE, CONFIG_VIRTIO_NET_IRQ);
 #else
-	/* Use SMC911x for other platforms */
-	rc = smc911x_initialize(0, CONFIG_SMC911X_BASE);
+	printf("No Ethernet driver configured!\n");
+	rc = -1;
 #endif
 
 	return rc;
