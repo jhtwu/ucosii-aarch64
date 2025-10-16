@@ -107,10 +107,23 @@ struct virtio_net_hdr {
     u16 num_buffers;
 } __attribute__((packed));
 
+/* Forward declarations for µC/OS-II types */
+struct os_event;
+typedef struct os_event OS_EVENT;
+typedef unsigned long long OS_STK;
+
 /* Queue sizes */
 #define VIRTIO_NET_QUEUE_SIZE   64
 #define VIRTIO_NET_RX_QUEUE     0
 #define VIRTIO_NET_TX_QUEUE     1
+
+/* RX packet queue for ISR to task communication */
+#define VIRTIO_NET_RX_PKT_QUEUE_SIZE  128
+
+struct virtio_net_rx_pkt {
+    u16 buffer_id;   /* Index into rx_buffers[] */
+    u16 len;         /* Packet length (excluding virtio_net_hdr) */
+};
 
 /* VirtIO Net Device Structure */
 struct virtio_net_dev {
@@ -142,6 +155,18 @@ struct virtio_net_dev {
     /* Diagnostic counts */
     u32 irq_count;
     u32 rx_packet_count;
+
+    /* RX packet queue (ISR to task communication) */
+    struct virtio_net_rx_pkt rx_pkt_queue[VIRTIO_NET_RX_PKT_QUEUE_SIZE];
+    volatile u16 rx_pkt_queue_head;  /* Written by ISR */
+    volatile u16 rx_pkt_queue_tail;  /* Written by task */
+
+    /* Semaphore for RX task wakeup */
+    OS_EVENT *rx_sem;
+
+    /* RX processing task */
+    OS_STK *rx_task_stack;
+    u8 rx_task_prio;
 };
 
 /* Register access functions */

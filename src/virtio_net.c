@@ -143,6 +143,90 @@ static int virtio_net_init_queue(struct virtio_net_dev *dev, int queue_num,
     return 0;
 }
 
+/* Enqueue RX packet descriptor (called from ISR) */
+static inline int virtio_net_rx_enqueue(struct virtio_net_dev *dev, u16 buffer_id, u16 len)
+{
+    u16 next_head = (dev->rx_pkt_queue_head + 1) % VIRTIO_NET_RX_PKT_QUEUE_SIZE;
+
+    /* Check if queue is full */
+    if (next_head == dev->rx_pkt_queue_tail) {
+        return -1;  /* Queue full */
+    }
+
+    /* Enqueue packet descriptor (no packet copy!) */
+    dev->rx_pkt_queue[dev->rx_pkt_queue_head].buffer_id = buffer_id;
+    dev->rx_pkt_queue[dev->rx_pkt_queue_head].len = len;
+
+    /* Memory barrier before updating head */
+    __asm__ volatile("dmb sy" ::: "memory");
+
+    dev->rx_pkt_queue_head = next_head;
+
+    return 0;
+}
+
+/* RX processing task - runs at task level, not in ISR context */
+static void virtio_net_rx_task(void *arg)
+{
+    struct virtio_net_dev *dev = (struct virtio_net_dev *)arg;
+    INT8U err;
+    u16 tail;
+    u16 head;
+    u16 buffer_id;
+    u16 pktlen;
+    u8 *pkt;
+    int processed;
+
+    while (1) {
+        /* Wait for packets (blocking on semaphore) */
+        OSSemPend(dev->rx_sem, 0, &err);
+        if (err != OS_ERR_NONE) {
+            continue;
+        }
+
+        processed = 0;
+
+        /* Process all enqueued packets */
+        while (1) {
+            tail = dev->rx_pkt_queue_tail;
+
+            /* Memory barrier before reading head */
+            __asm__ volatile("dmb sy" ::: "memory");
+
+            head = dev->rx_pkt_queue_head;
+
+            /* Check if queue is empty */
+            if (tail == head) {
+                break;
+            }
+
+            /* Dequeue packet descriptor */
+            buffer_id = dev->rx_pkt_queue[tail].buffer_id;
+            pktlen = dev->rx_pkt_queue[tail].len;
+
+            /* Get packet pointer (skip virtio_net_hdr) */
+            pkt = dev->rx_buffers[buffer_id] + sizeof(struct virtio_net_hdr);
+
+            /* Process packet directly from RX buffer (no copy!) */
+            net_process_received_packet(pkt, pktlen);
+            dev->rx_packet_count++;
+
+            /* Recycle buffer - make it available to device again */
+            dev->rx_avail->ring[dev->rx_avail->idx % VIRTIO_NET_QUEUE_SIZE] = buffer_id;
+            dev->rx_avail->idx++;
+            processed++;
+
+            /* Update tail pointer */
+            dev->rx_pkt_queue_tail = (tail + 1) % VIRTIO_NET_RX_PKT_QUEUE_SIZE;
+        }
+
+        /* Notify device of recycled buffers (batch notification) */
+        if (processed > 0) {
+            virtio_mmio_write(dev, VIRTIO_MMIO_QUEUE_NOTIFY, VIRTIO_NET_RX_QUEUE);
+        }
+    }
+}
+
 /* VirtIO interrupt handler for GICv3 */
 int BSP_OS_VirtioNetHandler(unsigned int cpu_id)
 {
@@ -151,6 +235,10 @@ int BSP_OS_VirtioNetHandler(unsigned int cpu_id)
     for (size_t i = 0; i < virtio_net_device_count; ++i) {
         struct virtio_net_dev *dev = virtio_net_device_list[i];
         u32 int_status;
+        u16 last_used;
+        struct vring_used_elem *elem;
+        u32 pktlen;
+        int enqueued = 0;
 
         if (!dev) {
             continue;
@@ -169,8 +257,37 @@ int BSP_OS_VirtioNetHandler(unsigned int cpu_id)
 
             dev->irq_count++;
 
-            /* Process received packets in normal path */
-            virtio_net_rx(&dev->eth_dev);
+            /* Fast path: Enqueue RX packets without processing */
+            last_used = dev->rx_last_used;
+            while (last_used != dev->rx_used->idx) {
+                elem = &dev->rx_used->ring[last_used % VIRTIO_NET_QUEUE_SIZE];
+
+                if (elem->len < sizeof(struct virtio_net_hdr)) {
+                    last_used++;
+                    continue;
+                }
+
+                pktlen = elem->len - sizeof(struct virtio_net_hdr);
+
+                /* Enqueue packet descriptor (no copy!) */
+                if (pktlen > 0 && pktlen <= PKTSIZE_ALIGN) {
+                    if (virtio_net_rx_enqueue(dev, elem->id, pktlen) == 0) {
+                        enqueued++;
+                    } else {
+                        /* Queue full - will process on next interrupt */
+                        break;
+                    }
+                }
+
+                last_used++;
+            }
+
+            dev->rx_last_used = last_used;
+
+            /* Wake up RX task if packets were enqueued */
+            if (enqueued > 0 && dev->rx_sem) {
+                OSSemPost(dev->rx_sem);
+            }
         }
     }
 
@@ -363,6 +480,38 @@ static int virtio_net_init_device(struct virtio_net_dev *dev)
 
     dev->rx_last_used = 0;
     dev->tx_last_used = 0;
+
+    /* Initialize RX packet queue */
+    dev->rx_pkt_queue_head = 0;
+    dev->rx_pkt_queue_tail = 0;
+
+    /* Create semaphore for RX task wakeup */
+    dev->rx_sem = OSSemCreate(0);
+    if (!dev->rx_sem) {
+        printf(DRIVERNAME ": Failed to create RX semaphore\n");
+        return -1;
+    }
+    printf(DRIVERNAME ": RX semaphore created\n");
+
+    /* Allocate stack for RX task (8KB) */
+    dev->rx_task_stack = (OS_STK *)malloc(8192);
+    if (!dev->rx_task_stack) {
+        printf(DRIVERNAME ": Failed to allocate RX task stack\n");
+        return -1;
+    }
+
+    /* Create RX processing task with unique priority for each device
+     * Priority 10 + device index (higher priority = lower number) */
+    dev->rx_task_prio = 10 + (u8)virtio_net_device_count;
+    INT8U err = OSTaskCreate(virtio_net_rx_task,
+                             (void *)dev,
+                             &dev->rx_task_stack[8192/sizeof(OS_STK) - 1],
+                             dev->rx_task_prio);
+    if (err != OS_ERR_NONE) {
+        printf(DRIVERNAME ": Failed to create RX task (err=%d)\n", err);
+        return -1;
+    }
+    printf(DRIVERNAME ": RX processing task created (priority %d)\n", dev->rx_task_prio);
 
     /* Set DRIVER_OK status - write ALL status bits cumulatively */
     printf(DRIVERNAME ": Step 11 - Setting DRIVER_OK...\n");
