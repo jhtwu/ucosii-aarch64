@@ -197,7 +197,4 @@ extern struct virtio_net_dev *virtio_net_device;
 struct virtio_net_dev *virtio_net_get_device(size_t index);
 size_t virtio_net_get_device_count(void);
 
-/* Enable interrupt-driven RX/TX handling by default */
-#define CONFIG_VIRTIO_NET_ENABLE_IRQS
-
 #endif /* _VIRTIO_NET_H_ */

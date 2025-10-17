@@ -523,18 +523,7 @@ static int virtio_net_init_device(struct virtio_net_dev *dev)
     status = virtio_mmio_read(dev, VIRTIO_MMIO_STATUS);
     printf(DRIVERNAME ": Status after DRIVER_OK: 0x%x\n", status);
 
-    printf(DRIVERNAME ": Step 12 - Preparing interrupt wiring\n");
-
-#ifdef CONFIG_VIRTIO_NET_ENABLE_IRQS
-    printf(DRIVERNAME ": Setting up GICv3 IRQ %d\n", dev->irq);
-    BSP_IntVectSet(dev->irq, 0u, 0u, BSP_OS_VirtioNetHandler);
-    BSP_IntSrcEn(dev->irq);
-    printf(DRIVERNAME ": Step 13 - Interrupt hook complete\n");
-#else
-    printf(DRIVERNAME ": Skipping IRQ wiring (polling mode)\n");
-#endif
-
-    printf(DRIVERNAME ": Initialization complete\n");
+    printf(DRIVERNAME ": Device initialization complete (IRQ setup deferred)\n");
 
     return 0;
 }
@@ -804,6 +793,19 @@ int virtio_net_initialize(unsigned long base_addr, u32 irq)
         printf(DRIVERNAME ": No VirtIO network devices initialized\n");
         return -1;
     }
+
+    /* Now that all devices are initialized, set up interrupts */
+    printf(DRIVERNAME ": Setting up interrupts for %zu device(s)...\n", virtio_net_device_count);
+    for (size_t i = 0; i < virtio_net_device_count; ++i) {
+        struct virtio_net_dev *dev = virtio_net_device_list[i];
+        if (dev) {
+            printf(DRIVERNAME ": Configuring IRQ %u for device %zu\n", dev->irq, i);
+            BSP_IntVectSet(dev->irq, 0u, 0u, BSP_OS_VirtioNetHandler);
+            BSP_IntSrcEn(dev->irq);
+            printf(DRIVERNAME ": IRQ %u enabled\n", dev->irq);
+        }
+    }
+    printf(DRIVERNAME ": All interrupts configured\n");
 
     return (int)virtio_net_device_count;
 }
