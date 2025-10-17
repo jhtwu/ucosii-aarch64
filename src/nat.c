@@ -12,6 +12,10 @@
 /* NAT translation table */
 static struct nat_entry nat_table[NAT_TABLE_SIZE];
 
+/* Hash table for fast reverse lookup (wan_port -> table index) */
+#define NAT_HASH_SIZE 128  /* Must be power of 2 */
+static s8 nat_hash_table[NAT_HASH_SIZE];  /* -1 = empty, >=0 = index into nat_table */
+
 /* NAT statistics */
 static struct nat_stats nat_statistics;
 
@@ -39,6 +43,9 @@ static struct nat_entry *nat_alloc_entry(void);
 static u16 nat_alloc_port(void);
 static u32 get_tick_count(void);
 static bool ip_equal(const u8 ip1[4], const u8 ip2[4]);
+static inline u8 nat_hash(u16 wan_port);
+static void nat_hash_add(u16 wan_port, int table_index);
+static void nat_hash_remove(u16 wan_port);
 
 /**
  * nat_init() - Initialize NAT subsystem
@@ -48,6 +55,7 @@ void nat_init(void)
     memset(nat_table, 0, sizeof(nat_table));
     memset(&nat_statistics, 0, sizeof(nat_statistics));
     memset(arp_table, 0, sizeof(arp_table));
+    memset(nat_hash_table, -1, sizeof(nat_hash_table));  /* Initialize hash table to empty */
     next_port = nat_cfg.port_range_start;
 
     printf("[NAT] Initialized: LAN=%d.%d.%d.%d WAN=%d.%d.%d.%d\n",
@@ -56,6 +64,7 @@ void nat_init(void)
            nat_cfg.wan_ip[0], nat_cfg.wan_ip[1],
            nat_cfg.wan_ip[2], nat_cfg.wan_ip[3]);
     printf("[ARP] Cache initialized with %d entries\n", ARP_TABLE_SIZE);
+    printf("[NAT] Hash table initialized with %d buckets\n", NAT_HASH_SIZE);
 }
 
 /**
@@ -121,6 +130,9 @@ int nat_translate_outbound(u8 protocol, const u8 lan_ip[4], u16 lan_port,
     /* Allocate WAN port */
     u16 allocated_port = nat_alloc_port();
 
+    /* Calculate table index */
+    int table_idx = (int)(entry - nat_table);
+
     /* Initialize entry */
     entry->active = true;
     entry->protocol = protocol;
@@ -131,6 +143,9 @@ int nat_translate_outbound(u8 protocol, const u8 lan_ip[4], u16 lan_port,
     entry->dst_port = dst_port;
     entry->last_activity = current_time;
     entry->timeout_sec = timeout;
+
+    /* Add to hash table for fast reverse lookup */
+    nat_hash_add(allocated_port, table_idx);
 
     *wan_port = allocated_port;
     nat_statistics.translations_out++;
@@ -189,6 +204,9 @@ int nat_cleanup_expired(u32 current_ticks)
         u32 age_sec = current_sec - entry_sec;
 
         if (age_sec >= nat_table[i].timeout_sec) {
+            /* Remove from hash table before marking inactive */
+            nat_hash_remove(nat_table[i].wan_port);
+
             nat_table[i].active = false;
             removed++;
             nat_statistics.timeouts++;
@@ -308,10 +326,32 @@ static struct nat_entry *nat_find_entry(u8 protocol, const u8 lan_ip[4],
 
 /**
  * nat_find_reverse_entry() - Find entry for inbound translation
+ * Uses hash table for O(1) lookup instead of O(N) linear search
  */
 static struct nat_entry *nat_find_reverse_entry(u8 protocol, u16 wan_port,
                                                 const u8 src_ip[4], u16 src_port)
 {
+    /* Hash table lookup - O(1) average case */
+    u8 hash_idx = nat_hash(wan_port);
+    s8 table_idx = nat_hash_table[hash_idx];
+
+    /* Check if hash bucket is empty */
+    if (table_idx < 0) {
+        return NULL;
+    }
+
+    /* Verify the entry matches (handle hash collisions) */
+    struct nat_entry *entry = &nat_table[table_idx];
+
+    if (entry->active &&
+        entry->protocol == protocol &&
+        entry->wan_port == wan_port &&
+        ip_equal(entry->dst_ip, src_ip) &&
+        entry->dst_port == src_port) {
+        return entry;
+    }
+
+    /* Hash collision - fall back to linear search (rare) */
     for (int i = 0; i < NAT_TABLE_SIZE; i++) {
         if (!nat_table[i].active) {
             continue;
@@ -502,4 +542,46 @@ void arp_cache_print(void)
     }
 
     printf("Active entries: %d/%d\n", active_count, ARP_TABLE_SIZE);
+}
+
+/* ========== Hash Table Helper Functions ========== */
+
+/**
+ * nat_hash() - Compute hash index for wan_port
+ *
+ * Uses simple modulo with power-of-2 size for fast computation.
+ * Hash collisions are handled by fallback to linear search.
+ */
+static inline u8 nat_hash(u16 wan_port)
+{
+    return (u8)(wan_port & (NAT_HASH_SIZE - 1));  /* Fast modulo for power of 2 */
+}
+
+/**
+ * nat_hash_add() - Add entry to hash table
+ *
+ * @wan_port: WAN port number to hash
+ * @table_index: Index into nat_table[] for this entry
+ *
+ * Note: If there's a collision, the new entry overwrites the old one.
+ * The old entry can still be found via linear search fallback.
+ */
+static void nat_hash_add(u16 wan_port, int table_index)
+{
+    u8 hash_idx = nat_hash(wan_port);
+    nat_hash_table[hash_idx] = (s8)table_index;
+}
+
+/**
+ * nat_hash_remove() - Remove entry from hash table
+ *
+ * @wan_port: WAN port number to remove
+ *
+ * Note: Only removes if the hash bucket points to an entry with this port.
+ * Does not search for collisions.
+ */
+static void nat_hash_remove(u16 wan_port)
+{
+    u8 hash_idx = nat_hash(wan_port);
+    nat_hash_table[hash_idx] = -1;
 }
