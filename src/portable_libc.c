@@ -109,6 +109,27 @@ void *memcpy(void *dest, const void *src, size_t n)
     const unsigned char *s = (const unsigned char *)src;
     size_t bytes = n;
 
+  
+    if (bytes >= 128) {
+        size_t neon_bytes = bytes & ~(size_t)127;
+        __asm__ __volatile__(
+            "cmp %2, #0\n"
+            "beq 2f\n"
+            "1:\n"
+            "ld1 {v0.16b, v1.16b, v2.16b, v3.16b}, [%1], #64\n"
+            "st1 {v0.16b, v1.16b, v2.16b, v3.16b}, [%0], #64\n"
+            "ld1 {v4.16b, v5.16b, v6.16b, v7.16b}, [%1], #64\n"
+            "st1 {v4.16b, v5.16b, v6.16b, v7.16b}, [%0], #64\n"
+            "subs %2, %2, #128\n"
+            "b.gt 1b\n"
+            "2:\n"
+            : "+r"(d), "+r"(s), "+r"(neon_bytes)
+            :
+            : "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7", "memory");
+        bytes -= neon_bytes;
+    }
+
+
     if (bytes >= 16u) {
         size_t bulk = bytes & ~(size_t)15;
         __asm__ __volatile__(
