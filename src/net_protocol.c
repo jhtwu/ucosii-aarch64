@@ -6,6 +6,26 @@
 #include <stddef.h>
 #include <string.h>
 
+#ifndef NET_TRACE_ENABLED
+#define NET_TRACE_ENABLED 0
+#endif
+
+#ifndef NET_WARN_ENABLED
+#define NET_WARN_ENABLED 1
+#endif
+
+#if NET_TRACE_ENABLED
+#define NET_TRACE(...) printf(__VA_ARGS__)
+#else
+#define NET_TRACE(...) do { } while (0)
+#endif
+
+#if NET_WARN_ENABLED
+#define NET_WARN(...) printf(__VA_ARGS__)
+#else
+#define NET_WARN(...) do { } while (0)
+#endif
+
 /* Network byte order helpers - inline macros */
 #ifndef htons
 #define htons(x) ((u16)((((x) & 0xff) << 8) | (((x) & 0xff00) >> 8)))
@@ -215,7 +235,7 @@ void net_enable_nat(void)
         nat_configure(net_ifaces[NET_IFACE_LAN].ip,
                      net_ifaces[NET_IFACE_WAN].ip);
         nat_enabled = true;
-        printf("[NET] NAT functionality enabled\n");
+        NET_TRACE("[NET] NAT functionality enabled\n");
     }
 }
 
@@ -265,7 +285,7 @@ static int net_forward_icmp_with_nat(u8 *pkt, int len, int from_iface_idx)
         /* Perform NAT translation */
         if (nat_translate_outbound(NAT_PROTO_ICMP, src_ip_bytes, original_id,
                                    dst_ip_bytes, 0, &translated_id) != 0) {
-            printf("[NAT] Outbound translation failed\n");
+            NET_WARN("[NAT] Outbound translation failed\n");
             return -1;
         }
 
@@ -278,11 +298,11 @@ static int net_forward_icmp_with_nat(u8 *pkt, int len, int from_iface_idx)
         /* Update ICMP ID */
         icmp->un.echo.id = htons(translated_id);
 
-        printf("[NAT] ICMP LAN->WAN: %d.%d.%d.%d:%u->%d.%d.%d.%d (SNAT to %d.%d.%d.%d:%u)\n",
-               src_ip_bytes[0], src_ip_bytes[1], src_ip_bytes[2], src_ip_bytes[3], original_id,
-               dst_ip_bytes[0], dst_ip_bytes[1], dst_ip_bytes[2], dst_ip_bytes[3],
-               net_ifaces[NET_IFACE_WAN].ip[0], net_ifaces[NET_IFACE_WAN].ip[1],
-               net_ifaces[NET_IFACE_WAN].ip[2], net_ifaces[NET_IFACE_WAN].ip[3], translated_id);
+        NET_TRACE("[NAT] ICMP LAN->WAN: %d.%d.%d.%d:%u->%d.%d.%d.%d (SNAT to %d.%d.%d.%d:%u)\n",
+                  src_ip_bytes[0], src_ip_bytes[1], src_ip_bytes[2], src_ip_bytes[3], original_id,
+                  dst_ip_bytes[0], dst_ip_bytes[1], dst_ip_bytes[2], dst_ip_bytes[3],
+                  net_ifaces[NET_IFACE_WAN].ip[0], net_ifaces[NET_IFACE_WAN].ip[1],
+                  net_ifaces[NET_IFACE_WAN].ip[2], net_ifaces[NET_IFACE_WAN].ip[3], translated_id);
 
     } else if (from_iface_idx == NET_IFACE_WAN) {
         /* WAN -> LAN: Inbound NAT (reverse SNAT) */
@@ -308,10 +328,10 @@ static int net_forward_icmp_with_nat(u8 *pkt, int len, int from_iface_idx)
         /* Restore original ICMP ID */
         icmp->un.echo.id = htons(original_lan_id);
 
-        printf("[NAT] ICMP WAN->LAN: %d.%d.%d.%d:%u->? (reverse NAT to %d.%d.%d.%d:%u)\n",
-               src_ip_bytes[0], src_ip_bytes[1], src_ip_bytes[2], src_ip_bytes[3], original_id,
-               original_lan_ip[0], original_lan_ip[1], original_lan_ip[2], original_lan_ip[3],
-               original_lan_id);
+        NET_TRACE("[NAT] ICMP WAN->LAN: %d.%d.%d.%d:%u->? (reverse NAT to %d.%d.%d.%d:%u)\n",
+                  src_ip_bytes[0], src_ip_bytes[1], src_ip_bytes[2], src_ip_bytes[3], original_id,
+                  original_lan_ip[0], original_lan_ip[1], original_lan_ip[2], original_lan_ip[3],
+                  original_lan_id);
     } else {
         return -1;
     }
@@ -356,8 +376,8 @@ static int net_forward_icmp_with_nat(u8 *pkt, int len, int from_iface_idx)
         virtio_net_send(out_iface->dev, pkt, len);
     } else {
         /* MAC not in cache - send ARP request and use broadcast for now */
-        printf("[ARP] MAC not found for %d.%d.%d.%d, sending ARP request\n",
-               dest_ip_for_arp[0], dest_ip_for_arp[1], dest_ip_for_arp[2], dest_ip_for_arp[3]);
+        NET_TRACE("[ARP] MAC not found for %d.%d.%d.%d, sending ARP request\n",
+                  dest_ip_for_arp[0], dest_ip_for_arp[1], dest_ip_for_arp[2], dest_ip_for_arp[3]);
         net_send_arp_request(dest_ip_for_arp, out_iface);
 
         /* Still send the packet with broadcast MAC - this works for some protocols */
@@ -414,7 +434,7 @@ static int net_forward_tcp_with_nat(u8 *pkt, int len, int from_iface_idx)
         /* Perform NAT translation */
         if (nat_translate_outbound(NAT_PROTO_TCP, src_ip_bytes, original_port,
                                    dst_ip_bytes, dst_port, &translated_port) != 0) {
-            printf("[NAT] TCP outbound translation failed\n");
+            NET_WARN("[NAT] TCP outbound translation failed\n");
             return -1;
         }
 
@@ -430,12 +450,12 @@ static int net_forward_tcp_with_nat(u8 *pkt, int len, int from_iface_idx)
         /* Rate-limit logging to reduce overhead */
         static u32 tcp_out_count = 0;
         if ((++tcp_out_count % 1000) == 1 || tcp_out_count < 10) {
-            printf("[NAT] TCP LAN->WAN: %d.%d.%d.%d:%u->%d.%d.%d.%d:%u (SNAT to %d.%d.%d.%d:%u) [%u pkts]\n",
-                   src_ip_bytes[0], src_ip_bytes[1], src_ip_bytes[2], src_ip_bytes[3], original_port,
-                   dst_ip_bytes[0], dst_ip_bytes[1], dst_ip_bytes[2], dst_ip_bytes[3], dst_port,
-                   net_ifaces[NET_IFACE_WAN].ip[0], net_ifaces[NET_IFACE_WAN].ip[1],
-                   net_ifaces[NET_IFACE_WAN].ip[2], net_ifaces[NET_IFACE_WAN].ip[3], translated_port,
-                   tcp_out_count);
+            NET_TRACE("[NAT] TCP LAN->WAN: %d.%d.%d.%d:%u->%d.%d.%d.%d:%u (SNAT to %d.%d.%d.%d:%u) [%u pkts]\n",
+                      src_ip_bytes[0], src_ip_bytes[1], src_ip_bytes[2], src_ip_bytes[3], original_port,
+                      dst_ip_bytes[0], dst_ip_bytes[1], dst_ip_bytes[2], dst_ip_bytes[3], dst_port,
+                      net_ifaces[NET_IFACE_WAN].ip[0], net_ifaces[NET_IFACE_WAN].ip[1],
+                      net_ifaces[NET_IFACE_WAN].ip[2], net_ifaces[NET_IFACE_WAN].ip[3], translated_port,
+                      tcp_out_count);
         }
 
     } else if (from_iface_idx == NET_IFACE_WAN) {
@@ -448,17 +468,17 @@ static int net_forward_tcp_with_nat(u8 *pkt, int len, int from_iface_idx)
         /* Rate-limited logging */
         static u32 tcp_in_count = 0;
         if ((++tcp_in_count % 1000) == 1 || tcp_in_count < 10) {
-            printf("[NAT] TCP WAN->LAN: Received from %d.%d.%d.%d:%u to port %u [%u pkts]\n",
-                   src_ip_bytes[0], src_ip_bytes[1], src_ip_bytes[2], src_ip_bytes[3], src_port, dst_port,
-                   tcp_in_count);
+            NET_TRACE("[NAT] TCP WAN->LAN: Received from %d.%d.%d.%d:%u to port %u [%u pkts]\n",
+                      src_ip_bytes[0], src_ip_bytes[1], src_ip_bytes[2], src_ip_bytes[3], src_port, dst_port,
+                      tcp_in_count);
         }
 
         /* Perform reverse NAT lookup */
         if (nat_translate_inbound(NAT_PROTO_TCP, dst_port,
-                                 src_ip_bytes, src_port,
-                                 original_lan_ip, &original_lan_port) != 0) {
+                                src_ip_bytes, src_port,
+                                original_lan_ip, &original_lan_port) != 0) {
             /* No matching NAT entry - packet not for us */
-            printf("[NAT] TCP WAN->LAN: No NAT mapping found for port %u\n", dst_port);
+            NET_TRACE("[NAT] TCP WAN->LAN: No NAT mapping found for port %u\n", dst_port);
             return -1;
         }
 
@@ -519,8 +539,8 @@ static int net_forward_tcp_with_nat(u8 *pkt, int len, int from_iface_idx)
     } else {
         /* MAC not in cache - send ARP request and DO NOT send the packet */
         /* TCP requires proper MAC addressing, broadcast won't work */
-        printf("[ARP] MAC not found for %d.%d.%d.%d, sending ARP request (packet dropped)\n",
-               dest_ip_for_arp[0], dest_ip_for_arp[1], dest_ip_for_arp[2], dest_ip_for_arp[3]);
+        NET_TRACE("[ARP] MAC not found for %d.%d.%d.%d, sending ARP request (packet dropped)\n",
+                  dest_ip_for_arp[0], dest_ip_for_arp[1], dest_ip_for_arp[2], dest_ip_for_arp[3]);
         net_send_arp_request(dest_ip_for_arp, out_iface);
         return -1;
     }
@@ -574,7 +594,7 @@ static int net_forward_udp_with_nat(u8 *pkt, int len, int from_iface_idx)
         /* Perform NAT translation */
         if (nat_translate_outbound(NAT_PROTO_UDP, src_ip_bytes, original_port,
                                    dst_ip_bytes, dst_port, &translated_port) != 0) {
-            printf("[NAT] UDP outbound translation failed\n");
+            NET_WARN("[NAT] UDP outbound translation failed\n");
             return -1;
         }
 
@@ -587,11 +607,11 @@ static int net_forward_udp_with_nat(u8 *pkt, int len, int from_iface_idx)
         /* Update UDP source port */
         udp->uh_sport = htons(translated_port);
 
-        printf("[NAT] UDP LAN->WAN: %d.%d.%d.%d:%u->%d.%d.%d.%d:%u (SNAT to %d.%d.%d.%d:%u)\n",
-               src_ip_bytes[0], src_ip_bytes[1], src_ip_bytes[2], src_ip_bytes[3], original_port,
-               dst_ip_bytes[0], dst_ip_bytes[1], dst_ip_bytes[2], dst_ip_bytes[3], dst_port,
-               net_ifaces[NET_IFACE_WAN].ip[0], net_ifaces[NET_IFACE_WAN].ip[1],
-               net_ifaces[NET_IFACE_WAN].ip[2], net_ifaces[NET_IFACE_WAN].ip[3], translated_port);
+        NET_TRACE("[NAT] UDP LAN->WAN: %d.%d.%d.%d:%u->%d.%d.%d.%d:%u (SNAT to %d.%d.%d.%d:%u)\n",
+                  src_ip_bytes[0], src_ip_bytes[1], src_ip_bytes[2], src_ip_bytes[3], original_port,
+                  dst_ip_bytes[0], dst_ip_bytes[1], dst_ip_bytes[2], dst_ip_bytes[3], dst_port,
+                  net_ifaces[NET_IFACE_WAN].ip[0], net_ifaces[NET_IFACE_WAN].ip[1],
+                  net_ifaces[NET_IFACE_WAN].ip[2], net_ifaces[NET_IFACE_WAN].ip[3], translated_port);
 
     } else if (from_iface_idx == NET_IFACE_WAN) {
         /* WAN -> LAN: Inbound NAT (reverse SNAT) */
@@ -619,10 +639,10 @@ static int net_forward_udp_with_nat(u8 *pkt, int len, int from_iface_idx)
         /* Restore original UDP destination port */
         udp->uh_dport = htons(original_lan_port);
 
-        printf("[NAT] UDP forward WAN->LAN: Port:%u -> %d.%d.%d.%d:%u\n",
-               dst_port,
-               original_lan_ip[0], original_lan_ip[1], original_lan_ip[2], original_lan_ip[3],
-               original_lan_port);
+        NET_TRACE("[NAT] UDP forward WAN->LAN: Port:%u -> %d.%d.%d.%d:%u\n",
+                  dst_port,
+                  original_lan_ip[0], original_lan_ip[1], original_lan_ip[2], original_lan_ip[3],
+                  original_lan_port);
     } else {
         return -1;
     }
@@ -666,8 +686,8 @@ static int net_forward_udp_with_nat(u8 *pkt, int len, int from_iface_idx)
         virtio_net_send(out_iface->dev, pkt, len);
     } else {
         /* MAC not in cache - send ARP request and use broadcast for now */
-        printf("[ARP] MAC not found for %d.%d.%d.%d, sending ARP request\n",
-               dest_ip_for_arp[0], dest_ip_for_arp[1], dest_ip_for_arp[2], dest_ip_for_arp[3]);
+        NET_TRACE("[ARP] MAC not found for %d.%d.%d.%d, sending ARP request\n",
+                  dest_ip_for_arp[0], dest_ip_for_arp[1], dest_ip_for_arp[2], dest_ip_for_arp[3]);
         net_send_arp_request(dest_ip_for_arp, out_iface);
 
         /* Still send the packet with broadcast MAC - UDP can work with broadcast */
@@ -719,9 +739,9 @@ static void net_send_arp_request(const u8 target_ip[4], struct net_iface *out_if
     memset(&arp->ar_data[10], 0x00, 6);                  /* Target MAC (unknown) */
     memcpy(&arp->ar_data[16], target_ip, 4);             /* Target IP */
 
-    printf("[ARP] Sending request: Who has %d.%d.%d.%d? Tell %d.%d.%d.%d\n",
-           target_ip[0], target_ip[1], target_ip[2], target_ip[3],
-           out_iface->ip[0], out_iface->ip[1], out_iface->ip[2], out_iface->ip[3]);
+    NET_TRACE("[ARP] Sending request: Who has %d.%d.%d.%d? Tell %d.%d.%d.%d\n",
+              target_ip[0], target_ip[1], target_ip[2], target_ip[3],
+              out_iface->ip[0], out_iface->ip[1], out_iface->ip[2], out_iface->ip[3]);
 
     /* Send ARP request */
     virtio_net_send(out_iface->dev, arp_pkt, 42);
@@ -764,9 +784,9 @@ static void handle_arp(u8 *pkt, int len)
         }
     } else if (arp_op == ARPOP_REPLY) {
         /* ARP reply - already learned above, nothing more to do */
-        printf("[ARP] Received reply: %d.%d.%d.%d is at %02x:%02x:%02x:%02x:%02x:%02x\n",
-               sender_ip[0], sender_ip[1], sender_ip[2], sender_ip[3],
-               sender_mac[0], sender_mac[1], sender_mac[2], sender_mac[3], sender_mac[4], sender_mac[5]);
+        NET_TRACE("[ARP] Received reply: %d.%d.%d.%d is at %02x:%02x:%02x:%02x:%02x:%02x\n",
+                  sender_ip[0], sender_ip[1], sender_ip[2], sender_ip[3],
+                  sender_mac[0], sender_mac[1], sender_mac[2], sender_mac[3], sender_mac[4], sender_mac[5]);
         return;
     } else {
         /* Unknown ARP operation */

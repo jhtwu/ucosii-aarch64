@@ -67,7 +67,6 @@
 #define  APP_CFG_TASK_START_STK_SIZE  4096
 
 static  OS_STK  AppTaskStartStk[APP_CFG_TASK_START_STK_SIZE];
-static  OS_STK  AppTaskPrintStk[APP_CFG_TASK_START_STK_SIZE];
 static  OS_STK  AppTaskNetworkStk[APP_CFG_TASK_START_STK_SIZE];
 
 /*
@@ -77,7 +76,6 @@ static  OS_STK  AppTaskNetworkStk[APP_CFG_TASK_START_STK_SIZE];
 */
 
 static  void  AppTaskStart   (void *p_arg);
-static  void  AppTaskPrint   (void *p_arg);
 static  void  AppTaskNetwork (void *p_arg);
 
 /*
@@ -143,48 +141,28 @@ static void  AppTaskStart (void *p_arg)
 
     uart_puts("AppTaskStart init\n");
 
-    OSTaskCreateExt(AppTaskPrint,
-                    0,
-                    &AppTaskPrintStk[APP_CFG_TASK_START_STK_SIZE - 1],
-                    APP_CFG_TASK_START_PRIO + 1,
-                    APP_CFG_TASK_START_PRIO + 1,
-                    &AppTaskPrintStk[0],
-                    APP_CFG_TASK_START_STK_SIZE,
-                    0,
-                    OS_TASK_OPT_STK_CLR | OS_TASK_OPT_STK_CHK);
-
     OSTaskCreateExt(AppTaskNetwork,
                     0,
                     &AppTaskNetworkStk[APP_CFG_TASK_START_STK_SIZE - 1],
-                    APP_CFG_TASK_START_PRIO + 2,
-                    APP_CFG_TASK_START_PRIO + 2,
+                    APP_CFG_TASK_START_PRIO + 1,
+                    APP_CFG_TASK_START_PRIO + 1,
                     &AppTaskNetworkStk[0],
                     APP_CFG_TASK_START_STK_SIZE,
                     0,
                     OS_TASK_OPT_STK_CLR | OS_TASK_OPT_STK_CHK);
 
-    while (DEF_TRUE) {
-        uart_puts("Task 1: tick\n");
-        OSTimeDlyHMSM(0, 0, 1, 0);
-    }
-}
-
-static void  AppTaskPrint (void *p_arg)
-{
-    (void)p_arg;
-
-    uart_puts("AppTaskPrint init\n");
-
-    while (DEF_TRUE) {
-        uart_puts("Task 2: tick\n");
-        OSTimeDlyHMSM(0, 0, 1, 0);
-    }
+    /* Hand over control to the dedicated network task */
+    OSTaskDel(OS_PRIO_SELF);
 }
 
 extern int eth_init(void);
 extern struct virtio_net_dev *virtio_net_device;
 extern void net_enable_nat(void);
 
+#define ENABLE_NET_SELF_TEST   0u
+#define NAT_MAINTENANCE_TICKS  1000u
+
+#if ENABLE_NET_SELF_TEST
 static const struct net_ping_target app_ping_targets[] = {
     {
         .name = "LAN",
@@ -199,6 +177,7 @@ static const struct net_ping_target app_ping_targets[] = {
         .device_index = 1u,
     },
 };
+#endif
 
 static void  AppTaskNetwork (void *p_arg)
 {
@@ -234,6 +213,7 @@ static void  AppTaskNetwork (void *p_arg)
     uart_puts("[INFO] Ready to forward traffic from LAN to WAN\n\n");
 #endif
 
+#if ENABLE_NET_SELF_TEST
     for (size_t i = 0u; i < (sizeof(app_ping_targets) / sizeof(app_ping_targets[0])); ++i) {
         if (net_ping_run(&app_ping_targets[i], 4u, NULL) != 0) {
             printf("[FAIL] %s ping test encountered an error\n",
@@ -243,6 +223,7 @@ static void  AppTaskNetwork (void *p_arg)
             }
         }
     }
+#endif
 
 #if ENABLE_NAT
     /* Print initial NAT statistics */
@@ -257,6 +238,11 @@ static void  AppTaskNetwork (void *p_arg)
     uart_puts("NAT router is ready to forward traffic.\n");
 
     while (DEF_TRUE) {
-        OSTimeDlyHMSM(0, 0, 5, 0);
+        INT32U ticks = OSTimeGet();
+
+        nat_cleanup_expired(ticks);
+        arp_cache_cleanup(ticks);
+
+        OSTimeDly(NAT_MAINTENANCE_TICKS);
     }
 }

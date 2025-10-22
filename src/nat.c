@@ -9,6 +9,26 @@
 #include "portable_libc.h"
 #include <string.h>
 
+#ifndef NAT_LOG_ENABLED
+#define NAT_LOG_ENABLED 0
+#endif
+
+#ifndef ARP_LOG_ENABLED
+#define ARP_LOG_ENABLED 0
+#endif
+
+#if NAT_LOG_ENABLED
+#define NAT_LOG(...) printf(__VA_ARGS__)
+#else
+#define NAT_LOG(...) do { } while (0)
+#endif
+
+#if ARP_LOG_ENABLED
+#define ARP_LOG(...) printf(__VA_ARGS__)
+#else
+#define ARP_LOG(...) do { } while (0)
+#endif
+
 /* NAT translation table */
 static struct nat_entry nat_table[NAT_TABLE_SIZE];
 
@@ -58,13 +78,13 @@ void nat_init(void)
     memset(nat_hash_table, -1, sizeof(nat_hash_table));  /* Initialize hash table to empty */
     next_port = nat_cfg.port_range_start;
 
-    printf("[NAT] Initialized: LAN=%d.%d.%d.%d WAN=%d.%d.%d.%d\n",
-           nat_cfg.lan_ip[0], nat_cfg.lan_ip[1],
-           nat_cfg.lan_ip[2], nat_cfg.lan_ip[3],
-           nat_cfg.wan_ip[0], nat_cfg.wan_ip[1],
-           nat_cfg.wan_ip[2], nat_cfg.wan_ip[3]);
-    printf("[ARP] Cache initialized with %d entries\n", ARP_TABLE_SIZE);
-    printf("[NAT] Hash table initialized with %d buckets\n", NAT_HASH_SIZE);
+    NAT_LOG("[NAT] Initialized: LAN=%d.%d.%d.%d WAN=%d.%d.%d.%d\n",
+            nat_cfg.lan_ip[0], nat_cfg.lan_ip[1],
+            nat_cfg.lan_ip[2], nat_cfg.lan_ip[3],
+            nat_cfg.wan_ip[0], nat_cfg.wan_ip[1],
+            nat_cfg.wan_ip[2], nat_cfg.wan_ip[3]);
+    NAT_LOG("[NAT] Hash table initialized with %d buckets\n", NAT_HASH_SIZE);
+    ARP_LOG("[ARP] Cache initialized with %d entries\n", ARP_TABLE_SIZE);
 }
 
 /**
@@ -75,11 +95,11 @@ void nat_configure(const u8 lan_ip[4], const u8 wan_ip[4])
     memcpy(nat_cfg.lan_ip, lan_ip, 4);
     memcpy(nat_cfg.wan_ip, wan_ip, 4);
 
-    printf("[NAT] Reconfigured: LAN=%d.%d.%d.%d WAN=%d.%d.%d.%d\n",
-           nat_cfg.lan_ip[0], nat_cfg.lan_ip[1],
-           nat_cfg.lan_ip[2], nat_cfg.lan_ip[3],
-           nat_cfg.wan_ip[0], nat_cfg.wan_ip[1],
-           nat_cfg.wan_ip[2], nat_cfg.wan_ip[3]);
+    NAT_LOG("[NAT] Reconfigured: LAN=%d.%d.%d.%d WAN=%d.%d.%d.%d\n",
+            nat_cfg.lan_ip[0], nat_cfg.lan_ip[1],
+            nat_cfg.lan_ip[2], nat_cfg.lan_ip[3],
+            nat_cfg.wan_ip[0], nat_cfg.wan_ip[1],
+            nat_cfg.wan_ip[2], nat_cfg.wan_ip[3]);
 }
 
 /**
@@ -150,9 +170,9 @@ int nat_translate_outbound(u8 protocol, const u8 lan_ip[4], u16 lan_port,
     *wan_port = allocated_port;
     nat_statistics.translations_out++;
 
-    printf("[NAT] New outbound: %d.%d.%d.%d:%u -> WAN:%u (proto=%u)\n",
-           lan_ip[0], lan_ip[1], lan_ip[2], lan_ip[3], lan_port,
-           allocated_port, protocol);
+    NAT_LOG("[NAT] New outbound: %d.%d.%d.%d:%u -> WAN:%u (proto=%u)\n",
+            lan_ip[0], lan_ip[1], lan_ip[2], lan_ip[3], lan_port,
+            allocated_port, protocol);
 
     return 0;
 }
@@ -214,7 +234,7 @@ int nat_cleanup_expired(u32 current_ticks)
     }
 
     if (removed > 0) {
-        printf("[NAT] Cleaned up %d expired entries\n", removed);
+        NAT_LOG("[NAT] Cleaned up %d expired entries\n", removed);
     }
 
     return removed;
@@ -459,7 +479,7 @@ void arp_cache_add(const u8 ip[4], const u8 mac[6])
             }
         }
         entry = &arp_table[oldest_idx];
-        printf("[ARP] Cache full, replacing oldest entry\n");
+        ARP_LOG("[ARP] Cache full, replacing oldest entry\n");
     }
 
     /* Update entry */
@@ -468,9 +488,9 @@ void arp_cache_add(const u8 ip[4], const u8 mac[6])
     memcpy(entry->mac, mac, 6);
     entry->last_update = current_time;
 
-    printf("[ARP] Learned: %d.%d.%d.%d -> %02x:%02x:%02x:%02x:%02x:%02x\n",
-           ip[0], ip[1], ip[2], ip[3],
-           mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    ARP_LOG("[ARP] Learned: %d.%d.%d.%d -> %02x:%02x:%02x:%02x:%02x:%02x\n",
+            ip[0], ip[1], ip[2], ip[3],
+            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }
 
 /**
@@ -510,7 +530,7 @@ int arp_cache_cleanup(u32 current_ticks)
     }
 
     if (removed > 0) {
-        printf("[ARP] Cleaned up %d expired entries\n", removed);
+        ARP_LOG("[ARP] Cleaned up %d expired entries\n", removed);
     }
 
     return removed;

@@ -21,18 +21,6 @@ static struct virtio_net_dev *virtio_net_device_list[VIRTIO_NET_MAX_DEVICES];
 static size_t virtio_net_device_count;
 struct virtio_net_dev *virtio_net_device = NULL;
 
-/* Timer functions from SMC911x */
-extern int get_timer(void);
-extern void udelay(int nsec);
-extern void mdelay(int second);
-
-/* Default MAC address */
-static uchar mac[6] = {0x52, 0x54, 0x00, 0x12, 0x34, 0x56};
-
-/* Packet buffers */
-static uchar net_pkt_buf[(PKTBUFSRX+1) * PKTSIZE_ALIGN + PKTALIGN];
-extern uchar *net_rx_packets[PKTBUFSRX];
-
 #define VIRTIO_QUEUE_ALIGN 4096u
 
 static void *virtio_alloc_queue_mem(size_t size)
@@ -535,50 +523,26 @@ int virtio_net_send(struct eth_device *eth_dev, void *packet, int length)
     struct virtio_net_hdr *hdr;
     u8 *buf;
     u16 desc_idx;
-    u16 available_slots;
+    u16 tx_avail_idx;
     u16 in_flight;
 
-    /* Check and update completed TX descriptors */
-    u16 old_last_used = dev->tx_last_used;
+    tx_avail_idx = dev->tx_avail->idx;
+
+    /* Reclaim descriptors completed by the device */
     dev->tx_last_used = dev->tx_used->idx;
+    in_flight = (u16)(tx_avail_idx - dev->tx_last_used);
 
-    /* Calculate in-flight packets (handle wrap-around with modulo) */
-    in_flight = (dev->tx_avail->idx - dev->tx_last_used) & 0xFFFF;
-    available_slots = VIRTIO_NET_QUEUE_SIZE - in_flight;
-
-    /* If queue is critically full, poll for completions before giving up */
-    if (available_slots < 4) {
-        int retries = 0;
-        while (available_slots < 4 && retries < 100) {
-            /* Force check the used ring again */
-            dev->tx_last_used = dev->tx_used->idx;
-            in_flight = (dev->tx_avail->idx - dev->tx_last_used) & 0xFFFF;
-            available_slots = VIRTIO_NET_QUEUE_SIZE - in_flight;
-
-            if (available_slots >= 4) {
-                break;
-            }
-
-            /* Small delay to let device process */
-            retries++;
-            if (retries % 10 == 0) {
-                /* Manually trigger interrupt check to update used ring */
-                virtio_net_rx(&dev->eth_dev);  /* This also updates tx_last_used */
-            }
-        }
-
-        if (available_slots < 2) {
-            static u32 drop_count = 0;
-            if ((++drop_count % 100) == 1) {
-                printf("[VIRTIO_NET] TX queue full after polling! Dropped %u packets (avail=%u, used=%u, in_flight=%u)\n",
-                       drop_count, dev->tx_avail->idx, dev->tx_last_used, in_flight);
-            }
+    /* Queue still full? refresh once more before dropping the packet */
+    if (in_flight >= VIRTIO_NET_QUEUE_SIZE) {
+        dev->tx_last_used = dev->tx_used->idx;
+        in_flight = (u16)(tx_avail_idx - dev->tx_last_used);
+        if (in_flight >= VIRTIO_NET_QUEUE_SIZE) {
             return -1;
         }
     }
 
     /* Get next available TX buffer */
-    desc_idx = dev->tx_avail->idx % VIRTIO_NET_QUEUE_SIZE;
+    desc_idx = tx_avail_idx % VIRTIO_NET_QUEUE_SIZE;
     buf = dev->tx_buffers[desc_idx];
 
     /* Prepare virtio_net header */
@@ -596,8 +560,8 @@ int virtio_net_send(struct eth_device *eth_dev, void *packet, int length)
     dev->tx_desc[desc_idx].next = 0;
 
     /* Add to available ring */
-    dev->tx_avail->ring[dev->tx_avail->idx % VIRTIO_NET_QUEUE_SIZE] = desc_idx;
-    dev->tx_avail->idx++;
+    dev->tx_avail->ring[desc_idx] = desc_idx;
+    dev->tx_avail->idx = tx_avail_idx + 1;
 
     /* Notify device */
     virtio_mmio_write(dev, VIRTIO_MMIO_QUEUE_NOTIFY, VIRTIO_NET_TX_QUEUE);
