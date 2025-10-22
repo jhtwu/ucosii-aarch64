@@ -48,40 +48,127 @@ void __stack_chk_fail(void)
 
 void *memset(void *dest, int c, size_t n)
 {
-    unsigned char *d = (unsigned char *)dest;
-    for (size_t i = 0; i < n; ++i) {
-        d[i] = (unsigned char)c;
+    if (n == 0u) {
+        return dest;
     }
+
+    unsigned char *d = (unsigned char *)dest;
+    unsigned char value = (unsigned char)c;
+
+    /* Build a 64-bit pattern replicated with the requested byte. */
+    uint64_t pattern = (uint64_t)value;
+    pattern |= pattern << 8;
+    pattern |= pattern << 16;
+    pattern |= pattern << 32;
+
+    size_t bytes = n;
+
+    if (bytes >= 16u) {
+        size_t bulk = bytes & ~(size_t)15;
+        __asm__ __volatile__(
+            "cmp %1, #0\n"
+            "beq 2f\n"
+            "1:\n"
+            "stp %x2, %x2, [%0], #16\n"
+            "subs %1, %1, #16\n"
+            "b.gt 1b\n"
+            "2:\n"
+            : "+r"(d), "+r"(bulk)
+            : "r"(pattern)
+            : "memory");
+        bytes &= (size_t)15;
+    }
+
+    /* Handle remaining 8/4/2/1 bytes using plain stores. */
+    if (bytes & 8u) {
+        *(uint64_t *)d = pattern;
+        d += 8;
+    }
+    if (bytes & 4u) {
+        *(uint32_t *)d = (uint32_t)pattern;
+        d += 4;
+    }
+    if (bytes & 2u) {
+        *(uint16_t *)d = (uint16_t)pattern;
+        d += 2;
+    }
+    if (bytes & 1u) {
+        *d = value;
+    }
+
     return dest;
 }
 
 void *memcpy(void *dest, const void *src, size_t n)
 {
+    if (n == 0u || dest == src) {
+        return dest;
+    }
+
     unsigned char *d = (unsigned char *)dest;
     const unsigned char *s = (const unsigned char *)src;
-    for (size_t i = 0; i < n; ++i) {
-        d[i] = s[i];
+    size_t bytes = n;
+
+    if (bytes >= 16u) {
+        size_t bulk = bytes & ~(size_t)15;
+        __asm__ __volatile__(
+            "cmp %2, #0\n"
+            "beq 2f\n"
+            "1:\n"
+            "ldp x9, x10, [%1], #16\n"
+            "stp x9, x10, [%0], #16\n"
+            "subs %2, %2, #16\n"
+            "b.gt 1b\n"
+            "2:\n"
+            : "+r"(d), "+r"(s), "+r"(bulk)
+            :
+            : "x9", "x10", "memory");
+        bytes &= (size_t)15;
     }
+
+    while (bytes-- > 0u) {
+        *d++ = *s++;
+    }
+
     return dest;
 }
 
 void *memmove(void *dest, const void *src, size_t n)
 {
-    unsigned char *d = (unsigned char *)dest;
-    const unsigned char *s = (const unsigned char *)src;
-
-    if (d == s || n == 0u) {
+    if (dest == src || n == 0u) {
         return dest;
     }
 
-    if (d < s) {
-        for (size_t i = 0; i < n; ++i) {
-            d[i] = s[i];
-        }
-    } else {
-        for (size_t i = n; i > 0; --i) {
-            d[i - 1] = s[i - 1];
-        }
+    unsigned char *d = (unsigned char *)dest;
+    const unsigned char *s = (const unsigned char *)src;
+
+    if (d < s || d >= (s + n)) {
+        return memcpy(dest, src, n);
+    }
+
+    unsigned char *d_end = d + n;
+    const unsigned char *s_end = s + n;
+    size_t bytes = n;
+
+    if (bytes >= 16u) {
+        size_t bulk = bytes & ~(size_t)15;
+        __asm__ __volatile__(
+            "cmp %2, #0\n"
+            "beq 2f\n"
+            "1:\n"
+            "ldp x9, x10, [%1, #-16]!\n"
+            "stp x9, x10, [%0, #-16]!\n"
+            "subs %2, %2, #16\n"
+            "b.gt 1b\n"
+            "2:\n"
+            : "+r"(d_end), "+r"(s_end), "+r"(bulk)
+            :
+            : "x9", "x10", "memory");
+        bytes &= (size_t)15;
+    }
+
+    while (bytes-- > 0u) {
+        *--d_end = *--s_end;
     }
 
     return dest;
