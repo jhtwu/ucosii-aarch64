@@ -8,6 +8,7 @@ TOOLCHAIN = aarch64-linux-gnu
 TARGET    = kernel.elf
 ARMARCH   = armv8-a
 CORE      = cortex-a57
+#CORE      = host -accel kvm # for armv8 kvm
 CC        = $(TOOLCHAIN)-gcc
 AS        = $(TOOLCHAIN)-as
 SIZE      = $(TOOLCHAIN)-size
@@ -165,13 +166,6 @@ ifeq ($(NET_MODE),bridge)
 		exit 1; \
 	fi
 	@echo "Using tap interfaces: $(QEMU_BRIDGE_TAP) (LAN), $(QEMU_WAN_TAP) (WAN)"
-	@if command -v brctl >/dev/null 2>&1; then \
-		echo "Bridge status:"; \
-		brctl show br-lan | grep -A 1 "bridge name" || brctl show br-lan; \
-		brctl show br-wan | grep -A 1 "bridge name" || brctl show br-wan; \
-	else \
-		echo "brctl not available; skipping bridge status output."; \
-	fi
 	timeout --foreground 60s $(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) \
 		-netdev tap,id=net0,ifname=$(QEMU_BRIDGE_TAP),script=no,downscript=no \
 		-device virtio-net-device,netdev=net0,bus=virtio-mmio-bus.0,mac=$(QEMU_BRIDGE_MAC) \
