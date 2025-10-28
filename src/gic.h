@@ -48,8 +48,8 @@
 #define     __O     volatile             /*!< Defines 'write only' permissions                */
 #define     __IO    volatile             /*!< Defines 'read / write' permissions              */
 
-#define GIC_INTERFACE 0x1e000100
-#define GIC_DISTRIBUTOR 0x1e001000
+#define GIC_INTERFACE   0x08010000
+#define GIC_DISTRIBUTOR 0x08000000
 /** \brief  Structure type to access the Generic Interrupt Controller Distributor (GICD)
  */
 typedef struct

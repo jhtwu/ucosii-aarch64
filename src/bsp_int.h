@@ -63,6 +63,8 @@ void        BSP_IntPrioMaskSet  (CPU_INT32U        prio);
 void        BSP_IntTargetSet    (CPU_INT32U        int_id,
                                  CPU_INT08U        int_target_list);
 
+CPU_INT08U  BSP_Int_GICVariantGet(void);
+
 CPU_BOOLEAN BSP_IntVectSet      (CPU_INT32U        int_id,
                                  CPU_INT32U        int_prio,
                                  CPU_INT08U        int_target_list,

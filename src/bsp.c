@@ -44,6 +44,10 @@
 #include  <bsp.h>
 #include  <bsp_int.h>
 
+#include  "gic.h"
+
+void gic_v3_init(void);
+
 
 /*
 *********************************************************************************************************
@@ -147,11 +151,13 @@ void  BSP_Init (void)
 	IMX6_REG_AIPSTZ3_OPACR3 = 0x0;
 	IMX6_REG_AIPSTZ3_OPACR4 = 0x0;
 #endif
-#if 1
 	BSP_Int_Init();
-	gic_v3_init();
+	if (BSP_Int_GICVariantGet() == 2u) {
+		GIC_Enable();
+	} else {
+		gic_v3_init();
+	}
 	BSP_OS_UARTInit();
-#endif
 	return;
 }
 

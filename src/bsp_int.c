@@ -53,14 +53,15 @@
 #ifdef VEXPRESS
 #define  BSP_INT_GIC_DIST_REG         ((ARM_REG_GIC_DIST_PTR)(ARM_PRIV_PERIPH_BASE + 0x1000u))
 #define  BSP_INT_GIC_IF_REG           ((ARM_REG_GIC_IF_PTR)(ARM_PRIV_PERIPH_BASE + 0x100u))
-#else //VIRT
-#ifdef GICV2
-	#define  BSP_INT_GIC_DIST_REG         ((ARM_REG_GIC_DIST_PTR)(0x08000000u))
-	#define  BSP_INT_GIC_IF_REG           ((ARM_REG_GIC_IF_PTR)(0x08010000u))
-#else
-	#define  BSP_INT_GIC_DIST_REG         ((ARM_REG_GIC_DIST_PTR)(0x08000000u))
-	#define  BSP_INT_GIC_RDIST_SGI_BASE   ((ARM_REG_GIC_DIST_PTR)(0x080b0000u))
-#endif
+#define  BSP_INT_GIC_RDIST_SGI_BASE   ((ARM_REG_GIC_DIST_PTR)(ARM_PRIV_PERIPH_BASE + 0x1f000u))
+#define  BSP_GIC_DIST_BASE_ADDR       (ARM_PRIV_PERIPH_BASE + 0x1000u)
+#else /* VIRT */
+#define  BSP_GIC_DIST_BASE_ADDR       (0x08000000u)
+#define  BSP_GIC_CPU_IF_BASE_ADDR     (0x08010000u)
+#define  BSP_GIC_RDIST_SGI_BASE_ADDR  (0x080b0000u)
+#define  BSP_INT_GIC_DIST_REG         ((ARM_REG_GIC_DIST_PTR)(BSP_GIC_DIST_BASE_ADDR))
+#define  BSP_INT_GIC_IF_REG           ((ARM_REG_GIC_IF_PTR)(BSP_GIC_CPU_IF_BASE_ADDR))
+#define  BSP_INT_GIC_RDIST_SGI_BASE   ((ARM_REG_GIC_DIST_PTR)(BSP_GIC_RDIST_SGI_BASE_ADDR))
 #endif
 
 /*
@@ -70,6 +71,20 @@
 */
 
 static  BSP_INT_FNCT_PTR BSP_IntVectTbl[ARM_GIC_INT_SRC_CNT];   /* Interrupt vector table.                              */
+static  CPU_INT08U        BSP_GIC_Variant = 2u;                 /* Detected GIC variant (2 or 3).                       */
+
+static void BSP_IntDetectVariant(void)
+{
+    CPU_INT32U typer = *((volatile CPU_REG32 *)(BSP_GIC_DIST_BASE_ADDR + 0x004u));
+
+    if (typer & (1u << 19)) {
+        BSP_GIC_Variant = 3u;
+        uart_puts("Detected GICv3\n");
+    } else {
+        BSP_GIC_Variant = 2u;
+        uart_puts("Detected GICv2\n");
+    }
+}
 
 static CPU_INT32U intc_icdicfrn_table[] =
 {
@@ -192,44 +207,43 @@ void BSP_Int_Init (void)
     CPU_INT32U  i;
 #endif
 
-#ifdef GICV2
+    BSP_IntDetectVariant();
+
+    if (BSP_GIC_Variant == 2u) {
 #if (BSP_CFG_FIQ_EN == DEF_ENABLED)
-    for(i = 0; i < 32; i++) {
-        BSP_INT_GIC_DIST_REG->ICDISRn[i] = 0xFFFFFFFFu;
-    }
+        for(i = 0; i < 32; i++) {
+            BSP_INT_GIC_DIST_REG->ICDISRn[i] = 0xFFFFFFFFu;
+        }
 #endif
 
-    BSP_INT_GIC_DIST_REG->ICDDCR |= 3u;
+        BSP_INT_GIC_DIST_REG->ICDDCR |= 3u;
                                                                 /* Enable the GIC interface.                            */
-    BSP_INT_GIC_IF_REG->ICCICR |= (ARM_BIT_GIC_IF_ICCICR_ENS | ARM_BIT_GIC_IF_ICCICR_ENNS);
+        BSP_INT_GIC_IF_REG->ICCICR |= (ARM_BIT_GIC_IF_ICCICR_ENS | ARM_BIT_GIC_IF_ICCICR_ENNS);
 
 #if (BSP_CFG_FIQ_EN == DEF_ENABLED)
-    BSP_INT_GIC_IF_REG->ICCICR |= ARM_BIT_GIC_IF_ICCICR_FIQEN | ARM_BIT_GIC_IF_ICCICR_ACKCTL;
+        BSP_INT_GIC_IF_REG->ICCICR |= ARM_BIT_GIC_IF_ICCICR_FIQEN | ARM_BIT_GIC_IF_ICCICR_ACKCTL;
 #endif
 
-	int offset;
+	    int offset;
 
-	for (offset = 0; offset < 32; offset++)
-	{
-		BSP_INT_GIC_DIST_REG->ICDICFRn[offset] = intc_icdicfrn_table[offset];
-		BSP_INT_GIC_DIST_REG->ICDISPRn[offset]=0xFfffffff;
+	    for (offset = 0; offset < 32; offset++)
+	    {
+		    BSP_INT_GIC_DIST_REG->ICDICFRn[offset] = intc_icdicfrn_table[offset];
+		    BSP_INT_GIC_DIST_REG->ICDISPRn[offset]=0xFfffffff;
 //		BSP_INT_GIC_DIST_REG->ICDISERn[offset]=0xffffffff;
 //		BSP_INT_GIC_DIST_REG->ICDICPRn[offset]=0xFfffffff;
-	}
-#else
-#if 1
-	int offset;
+	    }
+    } else {
+	    int offset;
 
-	for (offset = 0; offset < 32; offset++)
-	{
-		BSP_INT_GIC_RDIST_SGI_BASE->ICDICFRn[offset] = intc_icdicfrn_table[offset];
-		BSP_INT_GIC_RDIST_SGI_BASE->ICDISPRn[offset]=0xFfffffff;
+	    for (offset = 0; offset < 32; offset++)
+	    {
+		    BSP_INT_GIC_RDIST_SGI_BASE->ICDICFRn[offset] = intc_icdicfrn_table[offset];
+		    BSP_INT_GIC_RDIST_SGI_BASE->ICDISPRn[offset]=0xFfffffff;
 //		BSP_INT_GIC_DIST_REG->ICDISERn[offset]=0xffffffff;
 //		BSP_INT_GIC_DIST_REG->ICDICPRn[offset]=0xFfffffff;
-	}
-#endif
-
-#endif //GICV2
+	    }
+    }
     CPU_MB();
 
     CPU_IntEn();
@@ -268,25 +282,19 @@ void  BSP_IntSrcEn (CPU_INT32U int_id)
 
     reg_bit = int_id & 0x1F;                                    /* Mask bit ID.                                         */
 
-#ifdef GIC_V2
-	// printf("BSP_INT_GIC_DIST_REG->ICDISERn[%d]=0x%x, &BSP_INT_GIC_DIST_REG->ICDISERn=0x%x,int_id=%d\n",reg_off,BSP_INT_GIC_DIST_REG->ICDISERn[reg_off],&BSP_INT_GIC_DIST_REG->ICDISERn,int_id);
-    BSP_INT_GIC_DIST_REG->ICDISERn[reg_off] |= (1u << reg_bit);
-#else
-	ARM_REG_GIC_DIST_PTR base=0;
-	if(int_id<32)         //This code is refer to gic_set_type in irq-gic-v3.c , base address is according to int_id
-		base = BSP_INT_GIC_RDIST_SGI_BASE;
-	else{
-		base = BSP_INT_GIC_DIST_REG;
-	}
-		
-    base->ICDISERn[reg_off] |= (1u << reg_bit);
-	uart_puts("&base->ICDISERn[reg_off]=");
-	uart_puthex(&base->ICDISERn[reg_off]);
-	uart_puts("\n");
-	uart_puts("base->ICDISERn[reg_off]=");
-	uart_puthex(base->ICDISERn[reg_off]);
-	uart_puts("\n");
-#endif
+    if (BSP_GIC_Variant == 2u) {
+        BSP_INT_GIC_DIST_REG->ICDISERn[reg_off] |= (1u << reg_bit);
+    } else {
+        ARM_REG_GIC_DIST_PTR base = (int_id < 32u) ? BSP_INT_GIC_RDIST_SGI_BASE : BSP_INT_GIC_DIST_REG;
+
+        base->ICDISERn[reg_off] |= (1u << reg_bit);
+        uart_puts("&base->ICDISERn[reg_off]=");
+        uart_puthex(&base->ICDISERn[reg_off]);
+        uart_puts("\n");
+        uart_puts("base->ICDISERn[reg_off]=");
+        uart_puthex(base->ICDISERn[reg_off]);
+        uart_puts("\n");
+    }
 
     CPU_MB();
 }
@@ -322,17 +330,13 @@ void  BSP_IntSrcDis (CPU_INT32U int_id)
 
     reg_bit = int_id & 0x1F;                                    /* Mask bit ID.                                         */
 
-#ifdef GICV2
-    BSP_INT_GIC_DIST_REG->ICDICERn[reg_off] = 1u << reg_bit;
-#else
-	ARM_REG_GIC_DIST_PTR base=0;
-	if(int_id<32)         //This code is refer to gic_set_type in irq-gic-v3.c , base address is according to int_id
-		base = BSP_INT_GIC_RDIST_SGI_BASE;
-	else{
-		base = BSP_INT_GIC_DIST_REG;
-	}
-	base->ICDICERn[reg_off] = 1u << reg_bit;
-#endif
+    if (BSP_GIC_Variant == 2u) {
+        BSP_INT_GIC_DIST_REG->ICDICERn[reg_off] = 1u << reg_bit;
+    } else {
+        ARM_REG_GIC_DIST_PTR base = (int_id < 32u) ? BSP_INT_GIC_RDIST_SGI_BASE : BSP_INT_GIC_DIST_REG;
+
+        base->ICDICERn[reg_off] = 1u << reg_bit;
+    }
     CPU_MB();
 }
 
@@ -354,13 +358,11 @@ void  BSP_IntSrcDis (CPU_INT32U int_id)
 
 void  BSP_IntPrioMaskSet (CPU_INT32U prio)
 {
-#ifdef GICV2
-    if(prio < 256) {
+    if ((BSP_GIC_Variant == 2u) && (prio < 256u)) {
         CPU_MB();
         BSP_INT_GIC_IF_REG->ICCPMR = prio;
         CPU_MB();
     }
-#endif
 }
 
 
@@ -504,13 +506,16 @@ CPU_BOOLEAN  BSP_IntVectSet (CPU_INT32U       int_id,
 
     CPU_CRITICAL_ENTER();                                       /* Prevent partially configured interrupts.             */
 
-#ifdef GICV2
-    BSP_IntPrioSet(int_id,
-                   int_prio);
+    if (BSP_GIC_Variant == 2u) {
+        if (int_target_list == 0u) {
+            int_target_list = 1u;
+        }
+        BSP_IntPrioSet(int_id,
+                       int_prio);
 
-    BSP_IntTargetSet(int_id,
-                     int_target_list);
-#endif
+        BSP_IntTargetSet(int_id,
+                          int_target_list);
+    }
     BSP_IntVectTbl[int_id] = int_fnct;
     /* Cache ISR for GIC dispatch / 儲存 GIC 中斷對應的 ISR */
 
@@ -518,6 +523,11 @@ CPU_BOOLEAN  BSP_IntVectSet (CPU_INT32U       int_id,
 
 
     return (DEF_OK);
+}
+
+CPU_INT08U BSP_Int_GICVariantGet(void)
+{
+    return BSP_GIC_Variant;
 }
 
 
@@ -550,18 +560,19 @@ void  BSP_IntHandler (void)
 
     CPU_CRITICAL_ENTER();                                       /* Prevent partially configured interrupts.             */
 
-#ifdef GICV2
-    int_ack = BSP_INT_GIC_IF_REG->ICCIAR;                       /* Acknowledge the interrupt.                           */
-    int_id = int_ack & DEF_BIT_FIELD(10u, 0u);                  /* Mask away the CPUID.                                 */
-#else
-	int_id = gic_read_iar();
-#endif
+    if (BSP_GIC_Variant == 2u) {
+        int_ack = BSP_INT_GIC_IF_REG->ICCIAR;                       /* Acknowledge the interrupt.                           */
+        int_id = int_ack & DEF_BIT_FIELD(10u, 0u);                  /* Mask away the CPUID.                                 */
+        int_cpu = (int_ack & DEF_BIT_FIELD(12u, 2u)) >> 10u;        /* Extract the interrupt source.                        */
+    } else {
+        int_ack = 0u;
+        int_id = (CPU_INT32U)gic_read_iar();
+        int_cpu = 0u;
+    }
 
     if(int_id == 1023u) {                                       /* Spurious interrupt.                                  */
         return;
     }
-
-    int_cpu = (int_ack & DEF_BIT_FIELD(12u, 2u)) >> 10u;        /* Extract the interrupt source.                        */
 
     p_isr = BSP_IntVectTbl[int_id];                             /* Fetch ISR handler.                                   */
     /* Dispatch registered ISR (timer tick, peripherals, etc.) / 呼叫已註冊的 ISR（包含系統節拍與周邊） */
@@ -575,11 +586,11 @@ void  BSP_IntHandler (void)
 
     CPU_MB();                                                   /* Memory barrier before ending the interrupt.          */
 
-#ifdef GICV2
-    BSP_INT_GIC_IF_REG->ICCEOIR = int_id;
-#else
-	gic_write_eoir(int_id);
-#endif
+    if (BSP_GIC_Variant == 2u) {
+        BSP_INT_GIC_IF_REG->ICCEOIR = int_id;
+    } else {
+        gic_write_eoir(int_id);
+    }
     CPU_CRITICAL_EXIT();
 }
 

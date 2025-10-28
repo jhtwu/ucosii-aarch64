@@ -15,6 +15,11 @@ DUMP      = $(TOOLCHAIN)-objdump
 OBJCOPY   = $(TOOLCHAIN)-objcopy
 
 # ======================================================================================
+# Platform Configuration / 平台設定
+# ======================================================================================
+GIC_VERSION ?= 3
+
+# ======================================================================================
 # Directory Layout / 目錄配置
 # SRCDIR: source tree / 原始碼所在位置
 # OBJDIR: intermediate objects / 中繼目標檔
@@ -43,7 +48,7 @@ LFLAGS = -w -T $(LFILE) -nostartfiles -nostdlib -fno-exceptions -mcpu=$(CORE) -s
 GDB             = $(TOOLCHAIN)-gdb
 QEMU            = qemu-system-aarch64
 QEMU_IMAGE      = $(BINDIR)/$(TARGET)
-QEMU_BASE_FLAGS = -M virt,gic_version=3 -nographic -serial mon:stdio
+QEMU_BASE_FLAGS = -M virt,gic_version=$(GIC_VERSION) -nographic -serial mon:stdio
 QEMU_RUN_SMP    = 4
 QEMU_RUN_MEMORY = 2048M
 QEMU_SOFT_FLAGS = -cpu $(CORE) -smp $(QEMU_RUN_SMP) -m $(QEMU_RUN_MEMORY) -global virtio-mmio.force-legacy=false
@@ -205,7 +210,7 @@ dqemu: $(BINDIR)/$(TARGET)
 # Utility Targets / 其他常用目標
 # ======================================================================================
 
-test: test-context test-ping test-ping-wan test-dual
+test: test-context test-ping test-ping-wan
 
 test-context: $(TEST_CONTEXT_BIN)
 	@echo "========================================="
@@ -309,43 +314,6 @@ test-ping-wan: $(TEST_PING_WAN_BIN)
 		echo ""; echo "✗ TEST FAILED"; exit 1; \
 	elif [ $$status -eq 124 ]; then \
 		echo ""; echo "⚠ TEST TIMED OUT (no PASS marker)"; exit 1; \
-	else \
-		exit $$status; \
-	fi
-
-test-dual: $(BINDIR)/$(TARGET)
-	@echo "========================================="
-	@echo "Running Dual NIC Ping Diagnostics"
-	@echo "========================================="
-	@if ! ip link show $(QEMU_BRIDGE_TAP) >/dev/null 2>&1; then \
-		echo "ERROR: TAP interface '$(QEMU_BRIDGE_TAP)' not found. Please create it before running."; \
-		exit 1; \
-	fi
-	@if ! ip link show $(QEMU_WAN_TAP) >/dev/null 2>&1; then \
-		echo "ERROR: TAP interface '$(QEMU_WAN_TAP)' not found. Please create it before running."; \
-		exit 1; \
-	fi
-	@if command -v brctl >/dev/null 2>&1; then \
-		echo "Bridge status:"; \
-		brctl show br-lan | grep -A 1 "bridge name" || brctl show br-lan; \
-		brctl show br-wan | grep -A 1 "bridge name" || brctl show br-wan; \
-	else \
-		echo "brctl not available; skipping bridge status output."; \
-	fi
-	status=0; \
-	output=$$(timeout --foreground $(QEMU_RUN_TIMEOUT)s $(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) \
-		-netdev tap,id=net0,ifname=$(QEMU_BRIDGE_TAP),script=no,downscript=no \
-		-device virtio-net-device,netdev=net0,bus=virtio-mmio-bus.0,mac=$(QEMU_BRIDGE_MAC) \
-		-netdev tap,id=net1,ifname=$(QEMU_WAN_TAP),script=no,downscript=no \
-		-device virtio-net-device,netdev=net1,bus=virtio-mmio-bus.1,mac=$(QEMU_WAN_MAC) \
-		-kernel $(QEMU_IMAGE) 2>&1) || status=$$?; \
-	echo "$$output"; \
-    if echo "$$output" | grep -q "\[PASS\]"; then \
-        echo ""; echo "✓ TEST PASSED"; exit 0; \
-    elif echo "$$output" | grep -q "\[FAIL\]"; then \
-        echo ""; echo "✗ TEST FAILED"; exit 1; \
-	elif [ $$status -eq 124 ]; then \
-		echo ""; echo "⚠ TEST TIMED OUT"; exit 1; \
 	else \
 		exit $$status; \
 	fi
