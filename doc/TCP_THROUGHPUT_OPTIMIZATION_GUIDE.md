@@ -27,9 +27,16 @@
 
 **预期性能提升：1.5-2.5x** compared to software emulation
 
-## 进阶优化：启用多队列 (Tier 1A)
+## 进阶优化：启用多队列 (Tier 1A) - 需要 Driver 改造
 
-对于更高的性能（特别是多连接场景），可以启用多队列支持。
+**⚠️ 重要：多队列功能需要修改 guest driver 代码才能使用。**
+
+当前 virtio-net driver (`src/virtio_net.c`) 只实现了单队列模式。虽然 Makefile 支持配置多队列，但 guest OS 无法使用，因为 driver 需要：
+- 协商 VIRTIO_NET_F_MQ feature bit
+- 初始化多个 virtqueue 对（不只是 queue 0/1）
+- 实现队列选择逻辑
+
+对于更高的性能（特别是多连接场景），可以启用多队列支持（需先改造 driver）。
 
 ### 步骤 1: 创建多队列 TAP 接口（一次性设置）
 
@@ -44,16 +51,22 @@ make setup-mq-tap
 
 ### 步骤 2: 使用多队列运行
 
+**⚠️ 注意：当前 driver 不支持多队列**
+
 ```bash
 make run VIRTIO_QUEUES=4
 ```
 
-输出将显示：
-```
-=== Network: KVM with vhost-net and 4-queue ===
-```
+虽然 QEMU 会配置多队列，但 guest driver 目前只实现了单队列模式。要启用多队列需要修改 `src/virtio_net.c`：
+- 协商 `VIRTIO_NET_F_MQ` feature
+- 初始化多个 virtqueue 对
+- 实现队列选择逻辑
 
-**预期性能提升：2-4x** compared to software emulation
+**当前建议使用默认单队列配置即可获得良好性能。**
+
+**预期性能提升：**
+- 单队列（当前）: 1.5-2.5x
+- 多队列（需 driver 改造）: 2-4x
 
 ## 性能对比
 

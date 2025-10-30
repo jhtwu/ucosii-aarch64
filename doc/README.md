@@ -54,32 +54,26 @@ make run
 
 **Performance gain:** 1.5-2.5x compared to software emulation
 
-### Advanced Configuration (Best Performance)
+### Advanced Configuration (Best Performance) - Driver Modification Required
 
-```bash
-# Step 1: Create multi-queue TAP interfaces (one-time setup)
-make setup-mq-tap
+**⚠️ Note: Multi-queue requires driver code changes (not currently implemented)**
 
-# Step 2: Run with multi-queue enabled
-make run VIRTIO_QUEUES=4
-```
+The current virtio-net driver only supports single-queue mode. To use multi-queue:
+1. Modify `src/virtio_net.c` to negotiate `VIRTIO_NET_F_MQ`
+2. Initialize multiple virtqueue pairs
+3. Implement queue selection logic
 
-**Expected output:**
-```
-=== Network: KVM with vhost-net and 4-queue ===
-```
-
-**Performance gain:** 2-4x compared to software emulation
+For now, **use the default configuration** which already provides 1.5-2.5x performance improvement.
 
 ---
 
 ## 📊 Performance Summary
 
-| Configuration | Relative Performance | TCP Throughput |
-|--------------|---------------------|----------------|
-| Software emulation | 1x | 100-200 Mbps |
-| **Default (KVM + vhost)** | **1.5-2.5x** | **200-500 Mbps** |
-| Advanced (+ multi-queue) | 2-4x | 400-800+ Mbps |
+| Configuration | Relative Performance | TCP Throughput | Status |
+|--------------|---------------------|----------------|--------|
+| Software emulation | 1x | 100-200 Mbps | Baseline |
+| **Default (KVM + vhost)** | **1.5-2.5x** | **200-500 Mbps** | **✅ Available** |
+| Advanced (+ multi-queue) | 2-4x | 400-800+ Mbps | ⚠️ Needs driver mod |
 
 ---
 

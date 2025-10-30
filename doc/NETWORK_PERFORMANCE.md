@@ -7,11 +7,14 @@ This document describes the network performance optimizations implemented in the
 ## Performance Tiers
 
 ### Tier 1A: KVM + vhost-net + Multi-queue (Best Performance)
+**⚠️ Status: Requires driver modifications (not currently supported)**
+
 **Requirements:**
 - ARM64 host with KVM support
 - Access to `/dev/kvm` and `/dev/vhost-net`
 - User in `kvm` group or running with sudo
 - **Multi-queue TAP interfaces** (created with `make setup-mq-tap`)
+- **Modified virtio-net driver with MQ support** (currently not implemented)
 
 **Features:**
 - **vhost-net acceleration**: Kernel-space packet processing (bypasses userspace)
