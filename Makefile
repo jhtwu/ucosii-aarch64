@@ -25,6 +25,9 @@ HOST_ARCH := $(shell uname -m)
 # Check KVM availability / 檢查 KVM 可用性
 KVM_AVAILABLE := $(shell [ -r /dev/kvm ] && [ -w /dev/kvm ] && echo yes || echo no)
 
+# Check vhost-net availability for network acceleration / 檢查 vhost-net 網路加速可用性
+VHOST_AVAILABLE := $(shell [ -r /dev/vhost-net ] && [ -w /dev/vhost-net ] && echo yes || echo no)
+
 # Configure CPU and acceleration based on host architecture / 根據主機架構配置 CPU 和加速
 ifeq ($(HOST_ARCH),aarch64)
     # On ARM64 host, check if KVM is available / ARM64 主機檢查 KVM 是否可用
@@ -80,11 +83,48 @@ QEMU_BRIDGE_TAP = qemu-lan
 QEMU_BRIDGE_MAC = 52:54:00:12:34:56
 QEMU_WAN_TAP    = qemu-wan
 QEMU_WAN_MAC    = 52:54:00:65:43:21
+
+# Network performance tuning parameters / 網路效能調校參數
+# For KVM with vhost-net: use vhost=on for kernel-space packet processing / KVM 配合 vhost-net 使用核心空間封包處理
+# queues=N: enable multi-queue (requires multi_queue TAP interfaces) / 啟用多佇列（需要 multi_queue TAP 介面）
+# For virtio-net-device: mrg_rxbuf, packed, event_idx, tx/rx_queue_size / virtio-net-device 效能參數
+
+# Multi-queue support (set VIRTIO_QUEUES=4 to enable, requires multi_queue TAP) / 多佇列支援
+# To create multi-queue TAP: sudo ip tuntap add dev tap-name mode tap multi_queue user $USER
+VIRTIO_QUEUES ?= 1
+
+ifeq ($(KVM_AVAILABLE)$(VHOST_AVAILABLE),yesyes)
+    # Best performance: KVM + vhost-net / 最佳效能：KVM + vhost-net
+    ifeq ($(VIRTIO_QUEUES),1)
+        NETDEV_PERF_FLAGS = vhost=on
+        VIRTIO_PERF_FLAGS = mrg_rxbuf=on,packed=on,event_idx=on,tx_queue_size=1024,rx_queue_size=1024
+        NET_ACCEL_STATUS = KVM with vhost-net acceleration
+    else
+        NETDEV_PERF_FLAGS = vhost=on,queues=$(VIRTIO_QUEUES)
+        VIRTIO_PERF_FLAGS = mq=on,mrg_rxbuf=on,packed=on,event_idx=on,tx_queue_size=1024,rx_queue_size=1024
+        NET_ACCEL_STATUS = KVM with vhost-net and $(VIRTIO_QUEUES)-queue
+    endif
+else ifeq ($(KVM_AVAILABLE),yes)
+    # KVM without vhost-net: still use optimized buffers / KVM 但無 vhost-net：仍使用優化緩衝區
+    NETDEV_PERF_FLAGS =
+    VIRTIO_PERF_FLAGS = mrg_rxbuf=on,packed=on,event_idx=on,tx_queue_size=1024,rx_queue_size=1024
+    NET_ACCEL_STATUS = KVM (vhost-net unavailable)
+    VHOST_WARNING = yes
+else
+    # Software emulation: conservative settings / 軟體模擬：保守設定
+    NETDEV_PERF_FLAGS =
+    VIRTIO_PERF_FLAGS = mrg_rxbuf=on,event_idx=on,tx_queue_size=512,rx_queue_size=512
+    NET_ACCEL_STATUS = Software emulation
+endif
+
 QEMU_USER_NET_FLAGS = -netdev user,id=net0 -device virtio-net-device,netdev=net0
-QEMU_BRIDGE_FLAGS = -netdev tap,id=net0,ifname=$(QEMU_BRIDGE_TAP),script=no,downscript=no -device virtio-net-device,netdev=net0,bus=virtio-mmio-bus.0,mac=$(QEMU_BRIDGE_MAC)
-QEMU_WAN_BRIDGE_FLAGS = -netdev tap,id=net0,ifname=$(QEMU_WAN_TAP),script=no,downscript=no -device virtio-net-device,netdev=net0,bus=virtio-mmio-bus.0,mac=$(QEMU_WAN_MAC)
+QEMU_BRIDGE_FLAGS = -netdev tap,id=net0,ifname=$(QEMU_BRIDGE_TAP),script=no,downscript=no,$(NETDEV_PERF_FLAGS) -device virtio-net-device,netdev=net0,bus=virtio-mmio-bus.0,mac=$(QEMU_BRIDGE_MAC),$(VIRTIO_PERF_FLAGS)
+QEMU_WAN_BRIDGE_FLAGS = -netdev tap,id=net0,ifname=$(QEMU_WAN_TAP),script=no,downscript=no,$(NETDEV_PERF_FLAGS) -device virtio-net-device,netdev=net0,bus=virtio-mmio-bus.0,mac=$(QEMU_WAN_MAC),$(VIRTIO_PERF_FLAGS)
 QEMU_RUN_TIMEOUT ?= 10
 NET_MODE ?= bridge
+
+# Helper for comma in conditionals / 條件式中使用逗號的輔助變數
+comma := ,
 
 # ======================================================================================
 # Source Discovery / 原始碼蒐集
@@ -124,7 +164,7 @@ rm           = rm -f
 # ======================================================================================
 # Phony Targets / 虛擬目標宣告
 # ======================================================================================
-.PHONY: all clean remove run qemu qemu_gdb qemu-gdb gdb dqemu setup-network help test test-context test-net-init test-ping test-ping-wan test-dual test-nat-icmp test-nat-udp
+.PHONY: all clean remove run qemu qemu_gdb qemu-gdb gdb dqemu setup-network setup-mq-tap help test test-context test-net-init test-ping test-ping-wan test-dual test-nat-icmp test-nat-udp
 
 # ======================================================================================
 # Default Build Target / 預設建置目標
@@ -178,12 +218,22 @@ $(TEST_BINDIR)/test_%.elf: $(CORE_OBJECTS) $(TEST_SUPPORT_OBJ) $(TEST_OBJDIR)/te
 run: $(BINDIR)/$(TARGET)
 	@echo "=== Platform: $(PLATFORM_DESC) ==="
 	@echo "=== GIC Version: $(GIC_VERSION) ==="
+	@echo "=== Network: $(NET_ACCEL_STATUS) ==="
 ifeq ($(KVM_WARNING),yes)
 	@echo ""
 	@echo "⚠️  WARNING: KVM is not available"
 	@echo "    To enable KVM acceleration, run one of:"
 	@echo "    1. sudo usermod -aG kvm $$USER  (then log out/in)"
 	@echo "    2. sudo chmod 666 /dev/kvm"
+	@echo "    3. Run with: sudo make run"
+	@echo ""
+endif
+ifeq ($(VHOST_WARNING),yes)
+	@echo ""
+	@echo "⚠️  WARNING: vhost-net is not available (TCP performance will be limited)"
+	@echo "    To enable vhost-net acceleration, run one of:"
+	@echo "    1. sudo usermod -aG kvm $$USER  (then log out/in)"
+	@echo "    2. sudo chmod 666 /dev/vhost-net"
 	@echo "    3. Run with: sudo make run"
 	@echo ""
 endif
@@ -199,10 +249,10 @@ ifeq ($(NET_MODE),bridge)
 	fi
 	@echo "Using tap interfaces: $(QEMU_BRIDGE_TAP) (LAN), $(QEMU_WAN_TAP) (WAN)"
 	timeout --foreground 60s $(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) \
-		-netdev tap,id=net0,ifname=$(QEMU_BRIDGE_TAP),script=no,downscript=no \
-		-device virtio-net-device,netdev=net0,bus=virtio-mmio-bus.0,mac=$(QEMU_BRIDGE_MAC) \
-		-netdev tap,id=net1,ifname=$(QEMU_WAN_TAP),script=no,downscript=no \
-		-device virtio-net-device,netdev=net1,bus=virtio-mmio-bus.1,mac=$(QEMU_WAN_MAC) \
+		-netdev tap,id=net0,ifname=$(QEMU_BRIDGE_TAP),script=no,downscript=no$(if $(NETDEV_PERF_FLAGS),$(comma)$(NETDEV_PERF_FLAGS)) \
+		-device virtio-net-device,netdev=net0,bus=virtio-mmio-bus.0,mac=$(QEMU_BRIDGE_MAC),$(VIRTIO_PERF_FLAGS) \
+		-netdev tap,id=net1,ifname=$(QEMU_WAN_TAP),script=no,downscript=no$(if $(NETDEV_PERF_FLAGS),$(comma)$(NETDEV_PERF_FLAGS)) \
+		-device virtio-net-device,netdev=net1,bus=virtio-mmio-bus.1,mac=$(QEMU_WAN_MAC),$(VIRTIO_PERF_FLAGS) \
 		-kernel $(QEMU_IMAGE)
 else
 	@echo "Launching QEMU (user-mode networking) / 啟動 QEMU（使用 user-mode 網路）"
@@ -412,6 +462,31 @@ test-nat-icmp: $(TEST_NAT_ICMP_BIN)
 		exit $$status; \
 	fi
 
+# Setup multi-queue TAP interfaces for better performance / 建立支援多佇列的 TAP 介面以獲得更好效能
+setup-mq-tap:
+	@echo "Creating multi-queue TAP interfaces for $(QEMU_BRIDGE_TAP) and $(QEMU_WAN_TAP)..."
+	@echo "This will recreate the TAP interfaces with multi_queue support."
+	@echo ""
+	@if ip link show $(QEMU_BRIDGE_TAP) >/dev/null 2>&1; then \
+		echo "Removing existing $(QEMU_BRIDGE_TAP)..."; \
+		sudo ip link delete $(QEMU_BRIDGE_TAP); \
+	fi
+	@if ip link show $(QEMU_WAN_TAP) >/dev/null 2>&1; then \
+		echo "Removing existing $(QEMU_WAN_TAP)..."; \
+		sudo ip link delete $(QEMU_WAN_TAP); \
+	fi
+	@echo "Creating $(QEMU_BRIDGE_TAP) with multi_queue..."
+	sudo ip tuntap add dev $(QEMU_BRIDGE_TAP) mode tap multi_queue user $$USER
+	sudo ip link set $(QEMU_BRIDGE_TAP) up
+	@echo "Creating $(QEMU_WAN_TAP) with multi_queue..."
+	sudo ip tuntap add dev $(QEMU_WAN_TAP) mode tap multi_queue user $$USER
+	sudo ip link set $(QEMU_WAN_TAP) up
+	@echo ""
+	@echo "✓ Multi-queue TAP interfaces created successfully!"
+	@echo "  You can now run: make run VIRTIO_QUEUES=4"
+	@echo ""
+	@echo "To verify, run: ip tuntap show | grep -E '($(QEMU_BRIDGE_TAP)|$(QEMU_WAN_TAP))'"
+
 # Setup host-side tap/bridge network for QEMU / 建立 QEMU 使用的橋接網路與 TAP 介面
 setup-network:
 	@echo "Configuring host network bridges for QEMU / 建立 QEMU 使用的橋接網路"
@@ -441,8 +516,14 @@ help:
 	@echo "  make gdb        - Launch GDB / 啟動 GDB"
 	@echo "  make dqemu      - Run QEMU with default debug server / 預設偵錯模式"
 	@echo "  make setup-network - Prepare host bridges / 建立主機橋接網路"
+	@echo "  make setup-mq-tap  - Create multi-queue TAP interfaces / 建立多佇列 TAP 介面"
 	@echo "  make clean      - Remove build artifacts / 清除建置產物"
 	@echo "  make remove     - Remove binaries and objects / 移除可執行檔與目標檔"
+	@echo ""
+	@echo "Network performance options / 網路效能選項:"
+	@echo "  VIRTIO_QUEUES=N - Set number of virtio-net queues (default: 1) / 設定 virtio-net 佇列數量"
+	@echo "  Example: make run VIRTIO_QUEUES=4"
+	@echo "  Note: Requires multi-queue TAP interfaces / 需要 multi-queue TAP 介面"
 
 # Clean up intermediate files / 清除暫存檔案
 clean:
