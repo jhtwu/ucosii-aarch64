@@ -36,10 +36,10 @@ BINDIR = bin
 # 彙整編譯器、組譯器與連結器所需的參數。
 # ======================================================================================
 LFILE  = $(SRCDIR)/linker.ld
-CFLAGS = -std=gnu11 -w -nostartfiles -fno-exceptions -ffreestanding -fno-builtin -fno-stack-protector -mcpu=$(CORE) -static -g -I$(SRCDIR) -fstack-usage
+CFLAGS = -O3 -flto -fomit-frame-pointer -march=armv8-a+simd -ffunction-sections -fdata-sections -finline-functions -D_FORTIFY_SOURCE=0 -std=gnu11 -w -nostartfiles -fno-exceptions -ffreestanding -fno-builtin -fno-stack-protector -mcpu=$(CORE) -static -g -I$(SRCDIR) -fstack-usage
 AFLAGS = -g -I$(SRCDIR)
 LINKER = $(CC) -o
-LFLAGS = -w -T $(LFILE) -nostartfiles -nostdlib -fno-exceptions -mcpu=$(CORE) -static -g
+LFLAGS = -w -T $(LFILE) -nostartfiles -nostdlib -fno-exceptions -mcpu=$(CORE) -static -g -flto -Wl,--gc-sections
 
 # ======================================================================================
 # Debugging / Emulation Tools / 除錯與模擬工具設定
