@@ -75,7 +75,7 @@ GDB             = $(TOOLCHAIN)-gdb
 QEMU            = qemu-system-aarch64
 QEMU_IMAGE      = $(BINDIR)/$(TARGET)
 QEMU_BASE_FLAGS = -M virt,gic_version=$(GIC_VERSION) -nographic -serial mon:stdio
-QEMU_RUN_SMP    = 4
+QEMU_RUN_SMP    = 1
 QEMU_RUN_MEMORY = 2048M
 QEMU_SOFT_FLAGS = $(QEMU_CPU_FLAGS) -smp $(QEMU_RUN_SMP) -m $(QEMU_RUN_MEMORY) -global virtio-mmio.force-legacy=false
 QEMU_GDB_FLAGS  = -gdb tcp::2222 -S
@@ -89,9 +89,17 @@ QEMU_WAN_MAC    = 52:54:00:65:43:21
 # queues=N: enable multi-queue (requires multi_queue TAP interfaces) / 啟用多佇列（需要 multi_queue TAP 介面）
 # For virtio-net-device: mrg_rxbuf, packed, event_idx, tx/rx_queue_size / virtio-net-device 效能參數
 
-# Multi-queue support (set VIRTIO_QUEUES=4 to enable, requires multi_queue TAP) / 多佇列支援
+# Multi-queue support (auto-detected from TAP interfaces, or set manually) / 多佇列支援（自動偵測或手動設定）
 # To create multi-queue TAP: sudo ip tuntap add dev tap-name mode tap multi_queue user $USER
-VIRTIO_QUEUES ?= 1
+# Auto-detect multi-queue support from TAP interface / 自動偵測 TAP 介面的 multi-queue 支援
+TAP_HAS_MQ := $(shell ip tuntap show 2>/dev/null | grep -E '($(QEMU_BRIDGE_TAP)|$(QEMU_WAN_TAP))' | grep -q multi_queue && echo yes || echo no)
+
+# Set default VIRTIO_QUEUES based on TAP capability / 根據 TAP 能力設定預設佇列數
+ifeq ($(TAP_HAS_MQ),yes)
+    VIRTIO_QUEUES ?= 4
+else
+    VIRTIO_QUEUES ?= 1
+endif
 
 ifeq ($(KVM_AVAILABLE)$(VHOST_AVAILABLE),yesyes)
     # Best performance: KVM + vhost-net / 最佳效能：KVM + vhost-net
@@ -219,6 +227,7 @@ run: $(BINDIR)/$(TARGET)
 	@echo "=== Platform: $(PLATFORM_DESC) ==="
 	@echo "=== GIC Version: $(GIC_VERSION) ==="
 	@echo "=== Network: $(NET_ACCEL_STATUS) ==="
+	@echo "=== VirtIO Queues: $(VIRTIO_QUEUES) (TAP multi-queue: $(TAP_HAS_MQ)) ==="
 ifeq ($(KVM_WARNING),yes)
 	@echo ""
 	@echo "⚠️  WARNING: KVM is not available"
@@ -245,6 +254,31 @@ ifeq ($(NET_MODE),bridge)
 	fi
 	@if ! ip link show $(QEMU_WAN_TAP) >/dev/null 2>&1; then \
 		echo "ERROR: TAP interface '$(QEMU_WAN_TAP)' not found. Please create it before running."; \
+		exit 1; \
+	fi
+	@# Validate TAP and QEMU configuration compatibility / 驗證 TAP 和 QEMU 設定相容性
+	@if [ "$(VIRTIO_QUEUES)" != "1" ] && [ "$(TAP_HAS_MQ)" != "yes" ]; then \
+		echo ""; \
+		echo "ERROR: VIRTIO_QUEUES=$(VIRTIO_QUEUES) requires multi-queue TAP interfaces"; \
+		echo "       但 TAP 介面不支援 multi-queue"; \
+		echo ""; \
+		echo "解決方法："; \
+		echo "  1. 重新建立 multi-queue TAP: make setup-mq-tap"; \
+		echo "  2. 或使用 single-queue 模式: make run VIRTIO_QUEUES=1"; \
+		echo ""; \
+		exit 1; \
+	fi
+	@if [ "$(VIRTIO_QUEUES)" = "1" ] && [ "$(TAP_HAS_MQ)" = "yes" ]; then \
+		echo ""; \
+		echo "ERROR: TAP 介面是 multi-queue，不能使用 VIRTIO_QUEUES=1"; \
+		echo "       Multi-queue TAP interface cannot be used in single-queue mode"; \
+		echo ""; \
+		echo "解決方法："; \
+		echo "  1. 使用 multi-queue 模式: make run (auto-detects) 或 make run VIRTIO_QUEUES=4"; \
+		echo "  2. 或重新建立 single-queue TAP: sudo ip link del qemu-lan && sudo ip link del qemu-wan"; \
+		echo "     然後: sudo ip tuntap add dev qemu-lan mode tap user $$USER"; \
+		echo "           sudo ip tuntap add dev qemu-wan mode tap user $$USER"; \
+		echo ""; \
 		exit 1; \
 	fi
 	@echo "Using tap interfaces: $(QEMU_BRIDGE_TAP) (LAN), $(QEMU_WAN_TAP) (WAN)"
@@ -521,9 +555,12 @@ help:
 	@echo "  make remove     - Remove binaries and objects / 移除可執行檔與目標檔"
 	@echo ""
 	@echo "Network performance options / 網路效能選項:"
-	@echo "  VIRTIO_QUEUES=N - Set number of virtio-net queues (default: 1) / 設定 virtio-net 佇列數量"
-	@echo "  Example: make run VIRTIO_QUEUES=4"
-	@echo "  Note: Requires multi-queue TAP interfaces / 需要 multi-queue TAP 介面"
+	@echo "  VIRTIO_QUEUES=N - Set number of virtio-net queues (auto-detected by default) / 設定 virtio-net 佇列數量（預設自動偵測）"
+	@echo "                    Auto-detects from TAP interface: multi-queue TAP -> 4 queues, single-queue TAP -> 1 queue"
+	@echo "                    從 TAP 介面自動偵測：multi-queue TAP -> 4 佇列，single-queue TAP -> 1 佇列"
+	@echo "  Example: make run VIRTIO_QUEUES=4  (manual override / 手動覆蓋自動偵測)"
+	@echo "  Note: Multi-queue requires multi_queue TAP interfaces / Multi-queue 需要 multi_queue TAP 介面"
+	@echo "  Create multi-queue TAP: make setup-mq-tap / 建立 multi-queue TAP"
 
 # Clean up intermediate files / 清除暫存檔案
 clean:

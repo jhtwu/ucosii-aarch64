@@ -6,6 +6,24 @@ This document describes the multi-queue (MQ) implementation for the VirtIO-Net d
 
 Multi-queue support enables parallel packet processing across multiple CPU cores, improving network throughput and reducing latency under high load.
 
+## Quick Start
+
+**First-time setup** (one-time):
+```bash
+make setup-mq-tap  # Create multi-queue TAP interfaces
+```
+
+**Running with auto-detection** (recommended):
+```bash
+make run  # Automatically detects and uses optimal configuration
+```
+
+That's it! The system will:
+- ✅ Auto-detect TAP interface capabilities
+- ✅ Configure appropriate number of queues
+- ✅ Validate configuration compatibility
+- ✅ Provide clear error messages if misconfigured
+
 ## Implementation Status
 
 ### ✅ Completed Features
@@ -122,6 +140,10 @@ This preserves per-flow ordering while distributing different flows across queue
 
 ### Runtime Detection
 
+The driver and build system support **full runtime auto-detection** at two levels:
+
+#### 1. Device Capability Detection (Driver Level)
+
 The driver automatically detects the device's multi-queue capability:
 
 ```c
@@ -133,29 +155,73 @@ if (device_features & VIRTIO_NET_F_MQ) {
 }
 ```
 
-**No recompilation needed** - the same binary works with both single-queue and multi-queue devices.
+#### 2. TAP Interface Detection (Makefile Level)
+
+The Makefile automatically detects TAP interface multi-queue capability:
+
+```makefile
+TAP_HAS_MQ := $(shell ip tuntap show 2>/dev/null | grep -E '(qemu-lan|qemu-wan)' | grep -q multi_queue && echo yes || echo no)
+
+ifeq ($(TAP_HAS_MQ),yes)
+    VIRTIO_QUEUES ?= 4  # Auto-enable multi-queue
+else
+    VIRTIO_QUEUES ?= 1  # Use single-queue
+endif
+```
+
+**Key Benefits**:
+- **No recompilation needed** - same binary works with all configurations
+- **No manual configuration** - automatically detects and uses optimal settings
+- **Safe by default** - prevents incompatible TAP/QEMU configurations
 
 ### QEMU Configuration
 
-**Single Queue (default)**:
+#### Automatic Mode (Recommended)
+
+Simply run:
 ```bash
 make run
 ```
 
-**Multi-Queue (4 queues)**:
-```bash
-make run VIRTIO_QUEUES=4
+The build system will:
+1. Detect TAP interface configuration (`ip tuntap show`)
+2. Automatically set `VIRTIO_QUEUES=4` if TAP supports multi-queue
+3. Automatically set `VIRTIO_QUEUES=1` if TAP is single-queue
+4. Validate compatibility and show clear error if configuration mismatch
+
+**Status Display Example**:
+```
+=== Platform: ARM64 host with KVM acceleration ===
+=== GIC Version: 2 ===
+=== Network: KVM with vhost-net and 4-queue ===
+=== VirtIO Queues: 4 (TAP multi-queue: yes) ===
 ```
 
-This configures QEMU with:
-```
--netdev tap,id=net0,ifname=qemu-lan,vhost=on,queues=4
--device virtio-net-device,netdev=net0,mq=on,...
+#### Manual Override
+
+Force specific queue count:
+```bash
+make run VIRTIO_QUEUES=4  # Force multi-queue
+make run VIRTIO_QUEUES=1  # Force single-queue (will error if TAP is multi-queue)
 ```
 
-**Note**: Multi-queue requires TAP interfaces created with `multi_queue` flag:
+#### TAP Interface Setup
+
+**One-time setup for multi-queue support**:
 ```bash
-make setup-mq-tap  # One-time setup
+make setup-mq-tap
+```
+
+This creates TAP interfaces with the `multi_queue` flag:
+```bash
+sudo ip tuntap add dev qemu-lan mode tap multi_queue user $USER
+sudo ip tuntap add dev qemu-wan mode tap multi_queue user $USER
+```
+
+**Verify TAP configuration**:
+```bash
+ip tuntap show | grep -E '(qemu-lan|qemu-wan)'
+# Should show: qemu-lan: tap ... multi_queue ...
 ```
 
 ## Performance Characteristics
@@ -194,11 +260,16 @@ make setup-mq-tap  # One-time setup
 ### Basic Connectivity Test
 
 ```bash
-# Start with multi-queue
-make run VIRTIO_QUEUES=4
+# Start with auto-detected configuration (recommended)
+make run
 
 # From host, ping guest
 ping 192.168.1.1
+```
+
+**With manual queue configuration**:
+```bash
+make run VIRTIO_QUEUES=4  # Force 4 queues
 ```
 
 ### Throughput Test
@@ -228,17 +299,48 @@ virtio-net: Step 12 - MQ configured for 4 queue pairs
 
 ## Troubleshooting
 
-### Issue: Network not working with multi-queue
+### Issue: Configuration mismatch error
 
-**Symptom**: `could not configure /dev/net/tun: Invalid argument`
+**Symptom 1**: `ERROR: VIRTIO_QUEUES=4 requires multi-queue TAP interfaces`
 
-**Cause**: TAP interfaces are single-queue, but QEMU configured for multi-queue
+**Cause**: Trying to use multi-queue with single-queue TAP interfaces
 
 **Solution**:
 ```bash
-make setup-mq-tap  # Create multi-queue TAP interfaces
-make run VIRTIO_QUEUES=4
+# Option 1: Create multi-queue TAP interfaces
+make setup-mq-tap
+make run  # Auto-detects and uses multi-queue
+
+# Option 2: Use single-queue mode
+make run VIRTIO_QUEUES=1
 ```
+
+---
+
+**Symptom 2**: `ERROR: TAP 介面是 multi-queue，不能使用 VIRTIO_QUEUES=1`
+
+**Cause**: Multi-queue TAP interfaces cannot be used in single-queue mode
+
+**Solution**:
+```bash
+# Option 1: Use multi-queue mode (recommended)
+make run  # Auto-detects and uses VIRTIO_QUEUES=4
+
+# Option 2: Recreate TAP interfaces as single-queue
+sudo ip link del qemu-lan && sudo ip link del qemu-wan
+sudo ip tuntap add dev qemu-lan mode tap user $USER
+sudo ip tuntap add dev qemu-wan mode tap user $USER
+sudo ip link set qemu-lan up
+sudo ip link set qemu-wan up
+```
+
+---
+
+**Symptom 3**: `could not configure /dev/net/tun: Invalid argument`
+
+**Cause**: Legacy error - should be caught by validation now
+
+**Solution**: Run `make run` without overriding VIRTIO_QUEUES - auto-detection will prevent this
 
 ### Issue: TCP throughput degraded with multi-queue
 
@@ -353,6 +455,7 @@ struct queue_stats {
 
 ---
 
-**Last Updated**: 2025-10-30
-**Status**: Production Ready
+**Last Updated**: 2025-10-31
+**Status**: Production Ready ✅
+**Features**: Auto-detection, Flow-based hashing, Runtime configuration
 **Tested with**: QEMU 8.0+, vhost-net, ARM64 KVM
