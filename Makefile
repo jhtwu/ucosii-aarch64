@@ -8,7 +8,6 @@ TOOLCHAIN = aarch64-linux-gnu
 TARGET    = kernel.elf
 ARMARCH   = armv8-a
 CORE      = cortex-a57
-#CORE      = host -accel kvm # for armv8 kvm
 CC        = $(TOOLCHAIN)-gcc
 AS        = $(TOOLCHAIN)-as
 SIZE      = $(TOOLCHAIN)-size
@@ -18,7 +17,30 @@ OBJCOPY   = $(TOOLCHAIN)-objcopy
 # ======================================================================================
 # Platform Configuration / 平台設定
 # ======================================================================================
-GIC_VERSION ?= 3
+GIC_VERSION ?= 2
+
+# Detect host architecture / 檢測主機架構
+HOST_ARCH := $(shell uname -m)
+
+# Check KVM availability / 檢查 KVM 可用性
+KVM_AVAILABLE := $(shell [ -r /dev/kvm ] && [ -w /dev/kvm ] && echo yes || echo no)
+
+# Configure CPU and acceleration based on host architecture / 根據主機架構配置 CPU 和加速
+ifeq ($(HOST_ARCH),aarch64)
+    # On ARM64 host, check if KVM is available / ARM64 主機檢查 KVM 是否可用
+    ifeq ($(KVM_AVAILABLE),yes)
+        QEMU_CPU_FLAGS = -cpu host --enable-kvm
+        PLATFORM_DESC = ARM64 host with KVM acceleration
+    else
+        QEMU_CPU_FLAGS = -cpu $(CORE)
+        PLATFORM_DESC = ARM64 host (KVM unavailable, using software emulation)
+        KVM_WARNING = yes
+    endif
+else
+    # On other hosts (e.g., x86_64), use software emulation / 其他主機（如 x86_64）使用軟體模擬
+    QEMU_CPU_FLAGS = -cpu $(CORE)
+    PLATFORM_DESC = $(HOST_ARCH) with software emulation
+endif
 
 # ======================================================================================
 # Directory Layout / 目錄配置
@@ -52,8 +74,7 @@ QEMU_IMAGE      = $(BINDIR)/$(TARGET)
 QEMU_BASE_FLAGS = -M virt,gic_version=$(GIC_VERSION) -nographic -serial mon:stdio
 QEMU_RUN_SMP    = 4
 QEMU_RUN_MEMORY = 2048M
-QEMU_SOFT_FLAGS = -cpu $(CORE) -smp $(QEMU_RUN_SMP) -m $(QEMU_RUN_MEMORY) -global virtio-mmio.force-legacy=false
-QEMU_KVM_FLAGS  = -cpu host --enable-kvm -m 256M
+QEMU_SOFT_FLAGS = $(QEMU_CPU_FLAGS) -smp $(QEMU_RUN_SMP) -m $(QEMU_RUN_MEMORY) -global virtio-mmio.force-legacy=false
 QEMU_GDB_FLAGS  = -gdb tcp::2222 -S
 QEMU_BRIDGE_TAP = qemu-lan
 QEMU_BRIDGE_MAC = 52:54:00:12:34:56
@@ -103,7 +124,7 @@ rm           = rm -f
 # ======================================================================================
 # Phony Targets / 虛擬目標宣告
 # ======================================================================================
-.PHONY: all clean remove run run-kvm qemu qemu_gdb qemu-gdb gdb dqemu setup-network help test test-context test-net-init test-ping test-ping-wan test-dual test-nat-icmp test-nat-udp
+.PHONY: all clean remove run qemu qemu_gdb qemu-gdb gdb dqemu setup-network help test test-context test-net-init test-ping test-ping-wan test-dual test-nat-icmp test-nat-udp
 
 # ======================================================================================
 # Default Build Target / 預設建置目標
@@ -155,6 +176,17 @@ $(TEST_BINDIR)/test_%.elf: $(CORE_OBJECTS) $(TEST_SUPPORT_OBJ) $(TEST_OBJDIR)/te
 
 # Run under software emulation / 使用純軟體模擬執行
 run: $(BINDIR)/$(TARGET)
+	@echo "=== Platform: $(PLATFORM_DESC) ==="
+	@echo "=== GIC Version: $(GIC_VERSION) ==="
+ifeq ($(KVM_WARNING),yes)
+	@echo ""
+	@echo "⚠️  WARNING: KVM is not available"
+	@echo "    To enable KVM acceleration, run one of:"
+	@echo "    1. sudo usermod -aG kvm $$USER  (then log out/in)"
+	@echo "    2. sudo chmod 666 /dev/kvm"
+	@echo "    3. Run with: sudo make run"
+	@echo ""
+endif
 ifeq ($(NET_MODE),bridge)
 	@echo "Launching QEMU (dual NIC bridge networking for NAT) / 啟動 QEMU（雙網卡橋接用於 NAT）"
 	@if ! ip link show $(QEMU_BRIDGE_TAP) >/dev/null 2>&1; then \
@@ -176,11 +208,6 @@ else
 	@echo "Launching QEMU (user-mode networking) / 啟動 QEMU（使用 user-mode 網路）"
 	$(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) $(QEMU_USER_NET_FLAGS) -kernel $(QEMU_IMAGE)
 endif
-
-# Run with KVM acceleration / 啟動 KVM 加速模擬
-run-kvm: $(BINDIR)/$(TARGET)
-	@echo "Launching QEMU with KVM acceleration / 啟動支援 KVM 的 QEMU"
-	$(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_KVM_FLAGS) -kernel $(QEMU_IMAGE)
 
 # Backward-compatible aliases / 向後相容別名
 qemu: run
@@ -409,8 +436,7 @@ setup-network:
 help:
 	@echo "Available targets / 可用目標:"
 	@echo "  make            - Build firmware / 編譯韌體"
-	@echo "  make run        - Run in QEMU software emulation / 於 QEMU 軟體模擬執行"
-	@echo "  make run-kvm    - Run with KVM acceleration / 以 KVM 加速執行"
+	@echo "  make run        - Run in QEMU (auto-detects KVM on ARM64) / 於 QEMU 執行（ARM64 自動偵測 KVM）"
 	@echo "  make qemu-gdb   - Run QEMU and wait for GDB / 啟動 QEMU 並等待 GDB"
 	@echo "  make gdb        - Launch GDB / 啟動 GDB"
 	@echo "  make dqemu      - Run QEMU with default debug server / 預設偵錯模式"
