@@ -45,6 +45,91 @@ static inline u64 virt_to_phys(void *ptr)
     return (u64)ptr;
 }
 
+/* Send control command and wait for response */
+static int virtio_net_send_ctrl_cmd(struct virtio_net_dev *dev,
+                                      u8 class, u8 cmd,
+                                      const void *data, size_t data_len)
+{
+    struct virtio_net_ctrl_hdr *hdr;
+    u8 *status;
+    u64 hdr_addr, data_addr, status_addr;
+    int desc_idx = 0;
+
+    if (!dev->ctrl_buffer) {
+        return -1;
+    }
+
+    /* Setup command buffer */
+    hdr = (struct virtio_net_ctrl_hdr *)dev->ctrl_buffer;
+    hdr->class = class;
+    hdr->cmd = cmd;
+
+    status = dev->ctrl_buffer + sizeof(struct virtio_net_ctrl_hdr) + data_len;
+    *status = VIRTIO_NET_ERR;
+
+    /* Copy data if provided */
+    if (data && data_len > 0) {
+        memcpy(dev->ctrl_buffer + sizeof(struct virtio_net_ctrl_hdr), data, data_len);
+    }
+
+    /* Setup descriptors */
+    hdr_addr = virt_to_phys(hdr);
+    data_addr = virt_to_phys(dev->ctrl_buffer + sizeof(struct virtio_net_ctrl_hdr));
+    status_addr = virt_to_phys(status);
+
+    /* Descriptor 0: header (device-readable) */
+    dev->ctrl_desc[0].addr = hdr_addr;
+    dev->ctrl_desc[0].len = sizeof(struct virtio_net_ctrl_hdr);
+    dev->ctrl_desc[0].flags = VRING_DESC_F_NEXT;
+    dev->ctrl_desc[0].next = 1;
+
+    /* Descriptor 1: data (device-readable) or status if no data */
+    if (data_len > 0) {
+        dev->ctrl_desc[1].addr = data_addr;
+        dev->ctrl_desc[1].len = data_len;
+        dev->ctrl_desc[1].flags = VRING_DESC_F_NEXT;
+        dev->ctrl_desc[1].next = 2;
+
+        /* Descriptor 2: status (device-writable) */
+        dev->ctrl_desc[2].addr = status_addr;
+        dev->ctrl_desc[2].len = sizeof(u8);
+        dev->ctrl_desc[2].flags = VRING_DESC_F_WRITE;
+        dev->ctrl_desc[2].next = 0;
+        desc_idx = 0;
+    } else {
+        dev->ctrl_desc[1].addr = status_addr;
+        dev->ctrl_desc[1].len = sizeof(u8);
+        dev->ctrl_desc[1].flags = VRING_DESC_F_WRITE;
+        dev->ctrl_desc[1].next = 0;
+        desc_idx = 0;
+    }
+
+    /* Add to available ring */
+    u16 avail_idx = dev->ctrl_avail->idx;
+    dev->ctrl_avail->ring[avail_idx % VIRTIO_NET_QUEUE_SIZE] = desc_idx;
+    __asm__ volatile("dmb sy" ::: "memory");
+    dev->ctrl_avail->idx = avail_idx + 1;
+
+    /* Notify device */
+    int ctrl_queue_num = VIRTIO_NET_CTRL_QUEUE(dev->num_queue_pairs);
+    virtio_mmio_write(dev, VIRTIO_MMIO_QUEUE_NOTIFY, ctrl_queue_num);
+
+    /* Wait for response (simple polling for now) */
+    int timeout = 1000000;
+    while (dev->ctrl_used->idx == dev->ctrl_last_used && timeout-- > 0) {
+        __asm__ volatile("dmb sy" ::: "memory");
+    }
+
+    if (timeout <= 0) {
+        printf(DRIVERNAME ": Control command timeout\n");
+        return -1;
+    }
+
+    dev->ctrl_last_used = dev->ctrl_used->idx;
+
+    return (*status == VIRTIO_NET_OK) ? 0 : -1;
+}
+
 /* Initialize virtqueue */
 static int virtio_net_init_queue(struct virtio_net_dev *dev, int queue_num,
                                   struct vring_desc **desc,
@@ -104,51 +189,27 @@ static int virtio_net_init_queue(struct virtio_net_dev *dev, int queue_num,
     /* Mark queue as ready */
     virtio_mmio_write(dev, VIRTIO_MMIO_QUEUE_READY, 1);
 
-    /* Allocate buffers for RX queue */
-    if (queue_num == VIRTIO_NET_RX_QUEUE) {
-        for (i = 0; i < queue_size; i++) {
-            dev->rx_buffers[i] = (u8 *)malloc(PKTSIZE_ALIGN + sizeof(struct virtio_net_hdr));
-            if (!dev->rx_buffers[i]) {
-                printf(DRIVERNAME ": Failed to allocate RX buffer %d\n", i);
-                return -1;
-            }
-
-            /* Setup descriptor */
-            (*desc)[i].addr = virt_to_phys(dev->rx_buffers[i]);
-            (*desc)[i].len = PKTSIZE_ALIGN + sizeof(struct virtio_net_hdr);
-            (*desc)[i].flags = VRING_DESC_F_WRITE;
-            (*desc)[i].next = 0;
-
-            /* Add to available ring */
-            (*avail)->ring[i] = i;
-        }
-        (*avail)->idx = queue_size;
-
-        /* Kick the device so it notices newly available RX buffers */
-        virtio_mmio_write(dev, VIRTIO_MMIO_QUEUE_NOTIFY, queue_num);
-    }
-
     return 0;
 }
 
 /* Enqueue RX packet descriptor (called from ISR) */
-static inline int virtio_net_rx_enqueue(struct virtio_net_dev *dev, u16 buffer_id, u16 len)
+static inline int virtio_net_rx_enqueue(struct virtio_net_queue_pair *qp, u16 buffer_id, u16 len)
 {
-    u16 next_head = (dev->rx_pkt_queue_head + 1) % VIRTIO_NET_RX_PKT_QUEUE_SIZE;
+    u16 next_head = (qp->rx_pkt_queue_head + 1) % VIRTIO_NET_RX_PKT_QUEUE_SIZE;
 
     /* Check if queue is full */
-    if (next_head == dev->rx_pkt_queue_tail) {
+    if (next_head == qp->rx_pkt_queue_tail) {
         return -1;  /* Queue full */
     }
 
     /* Enqueue packet descriptor (no packet copy!) */
-    dev->rx_pkt_queue[dev->rx_pkt_queue_head].buffer_id = buffer_id;
-    dev->rx_pkt_queue[dev->rx_pkt_queue_head].len = len;
+    qp->rx_pkt_queue[qp->rx_pkt_queue_head].buffer_id = buffer_id;
+    qp->rx_pkt_queue[qp->rx_pkt_queue_head].len = len;
 
     /* Memory barrier before updating head */
     __asm__ volatile("dmb sy" ::: "memory");
 
-    dev->rx_pkt_queue_head = next_head;
+    qp->rx_pkt_queue_head = next_head;
 
     return 0;
 }
@@ -156,7 +217,7 @@ static inline int virtio_net_rx_enqueue(struct virtio_net_dev *dev, u16 buffer_i
 /* RX processing task - runs at task level, not in ISR context */
 static void virtio_net_rx_task(void *arg)
 {
-    struct virtio_net_dev *dev = (struct virtio_net_dev *)arg;
+    struct virtio_net_queue_pair *qp = (struct virtio_net_queue_pair *)arg;
     INT8U err;
     u16 tail;
     u16 head;
@@ -167,7 +228,7 @@ static void virtio_net_rx_task(void *arg)
 
     while (1) {
         /* Wait for packets (blocking on semaphore) */
-        OSSemPend(dev->rx_sem, 0, &err);
+        OSSemPend(qp->rx_sem, 0, &err);
         if (err != OS_ERR_NONE) {
             continue;
         }
@@ -176,12 +237,12 @@ static void virtio_net_rx_task(void *arg)
 
         /* Process all enqueued packets */
         while (1) {
-            tail = dev->rx_pkt_queue_tail;
+            tail = qp->rx_pkt_queue_tail;
 
             /* Memory barrier before reading head */
             __asm__ volatile("dmb sy" ::: "memory");
 
-            head = dev->rx_pkt_queue_head;
+            head = qp->rx_pkt_queue_head;
 
             /* Check if queue is empty */
             if (tail == head) {
@@ -189,28 +250,28 @@ static void virtio_net_rx_task(void *arg)
             }
 
             /* Dequeue packet descriptor */
-            buffer_id = dev->rx_pkt_queue[tail].buffer_id;
-            pktlen = dev->rx_pkt_queue[tail].len;
+            buffer_id = qp->rx_pkt_queue[tail].buffer_id;
+            pktlen = qp->rx_pkt_queue[tail].len;
 
             /* Get packet pointer (skip virtio_net_hdr) */
-            pkt = dev->rx_buffers[buffer_id] + sizeof(struct virtio_net_hdr);
+            pkt = qp->rx_buffers[buffer_id] + sizeof(struct virtio_net_hdr);
 
             /* Process packet directly from RX buffer (no copy!) */
             net_process_received_packet(pkt, pktlen);
-            dev->rx_packet_count++;
 
             /* Recycle buffer - make it available to device again */
-            dev->rx_avail->ring[dev->rx_avail->idx % VIRTIO_NET_QUEUE_SIZE] = buffer_id;
-            dev->rx_avail->idx++;
+            qp->rx_avail->ring[qp->rx_avail->idx % VIRTIO_NET_QUEUE_SIZE] = buffer_id;
+            qp->rx_avail->idx++;
             processed++;
 
             /* Update tail pointer */
-            dev->rx_pkt_queue_tail = (tail + 1) % VIRTIO_NET_RX_PKT_QUEUE_SIZE;
+            qp->rx_pkt_queue_tail = (tail + 1) % VIRTIO_NET_RX_PKT_QUEUE_SIZE;
         }
 
         /* Notify device of recycled buffers (batch notification) */
         if (processed > 0) {
-            virtio_mmio_write(dev, VIRTIO_MMIO_QUEUE_NOTIFY, VIRTIO_NET_RX_QUEUE);
+            int rx_queue_num = qp->queue_pair_index * 2;
+            virtio_mmio_write(qp->dev, VIRTIO_MMIO_QUEUE_NOTIFY, rx_queue_num);
         }
     }
 }
@@ -240,41 +301,47 @@ int BSP_OS_VirtioNetHandler(unsigned int cpu_id)
         virtio_mmio_write(dev, VIRTIO_MMIO_INTERRUPT_ACK, int_status);
 
         if (int_status & 0x1) {  /* Used buffer notification */
-            /* Lazy cleanup of TX completions (amortized cost) */
-            dev->tx_last_used = dev->tx_used->idx;
-
             dev->irq_count++;
 
-            /* Fast path: Enqueue RX packets without processing */
-            last_used = dev->rx_last_used;
-            while (last_used != dev->rx_used->idx) {
-                elem = &dev->rx_used->ring[last_used % VIRTIO_NET_QUEUE_SIZE];
+            /* Process all queue pairs */
+            for (size_t j = 0; j < dev->num_queue_pairs; j++) {
+                struct virtio_net_queue_pair *qp = &dev->queue_pairs[j];
+                enqueued = 0;
 
-                if (elem->len < sizeof(struct virtio_net_hdr)) {
-                    last_used++;
-                    continue;
-                }
+                /* Lazy cleanup of TX completions (amortized cost) */
+                qp->tx_last_used = qp->tx_used->idx;
 
-                pktlen = elem->len - sizeof(struct virtio_net_hdr);
+                /* Fast path: Enqueue RX packets without processing */
+                last_used = qp->rx_last_used;
+                while (last_used != qp->rx_used->idx) {
+                    elem = &qp->rx_used->ring[last_used % VIRTIO_NET_QUEUE_SIZE];
 
-                /* Enqueue packet descriptor (no copy!) */
-                if (pktlen > 0 && pktlen <= PKTSIZE_ALIGN) {
-                    if (virtio_net_rx_enqueue(dev, elem->id, pktlen) == 0) {
-                        enqueued++;
-                    } else {
-                        /* Queue full - will process on next interrupt */
-                        break;
+                    if (elem->len < sizeof(struct virtio_net_hdr)) {
+                        last_used++;
+                        continue;
                     }
+
+                    pktlen = elem->len - sizeof(struct virtio_net_hdr);
+
+                    /* Enqueue packet descriptor (no copy!) */
+                    if (pktlen > 0 && pktlen <= PKTSIZE_ALIGN) {
+                        if (virtio_net_rx_enqueue(qp, elem->id, pktlen) == 0) {
+                            enqueued++;
+                        } else {
+                            /* Queue full - will process on next interrupt */
+                            break;
+                        }
+                    }
+
+                    last_used++;
                 }
 
-                last_used++;
-            }
+                qp->rx_last_used = last_used;
 
-            dev->rx_last_used = last_used;
-
-            /* Wake up RX task if packets were enqueued */
-            if (enqueued > 0 && dev->rx_sem) {
-                OSSemPost(dev->rx_sem);
+                /* Wake up RX task for this queue pair if packets were enqueued */
+                if (enqueued > 0 && qp->rx_sem) {
+                    OSSemPost(qp->rx_sem);
+                }
             }
         }
     }
@@ -398,6 +465,21 @@ static int virtio_net_init_device(struct virtio_net_dev *dev)
     } else {
         printf(DRIVERNAME ": WARNING: Device does not advertise VIRTIO_NET_F_MAC\n");
     }
+
+    /* Check for multi-queue support */
+    bool has_mq = false;
+    if (features_lo & (1u << VIRTIO_NET_F_MQ)) {
+        driver_features_lo |= (1u << VIRTIO_NET_F_MQ);
+        has_mq = true;
+        printf(DRIVERNAME ": Negotiating VIRTIO_NET_F_MQ\n");
+    }
+
+    /* Control virtqueue is needed for multi-queue */
+    if (has_mq && (features_lo & (1u << VIRTIO_NET_F_CTRL_VQ))) {
+        driver_features_lo |= (1u << VIRTIO_NET_F_CTRL_VQ);
+        printf(DRIVERNAME ": Negotiating VIRTIO_NET_F_CTRL_VQ\n");
+    }
+
     if (features_hi & (1u << (VIRTIO_F_VERSION_1 - 32))) {
         driver_features_hi |= (1u << (VIRTIO_F_VERSION_1 - 32));
         printf(DRIVERNAME ": Negotiating VIRTIO_F_VERSION_1\n");
@@ -440,66 +522,144 @@ static int virtio_net_init_device(struct virtio_net_dev *dev)
            config->mac[0], config->mac[1], config->mac[2],
            config->mac[3], config->mac[4], config->mac[5]);
 
-    /* Initialize queues */
-    printf(DRIVERNAME ": Step 9 - Initializing RX queue...\n");
-    if (virtio_net_init_queue(dev, VIRTIO_NET_RX_QUEUE,
-                               &dev->rx_desc, &dev->rx_avail, &dev->rx_used) < 0) {
-        printf(DRIVERNAME ": RX queue init failed\n");
-        return -1;
+    /* Read max_virtqueue_pairs if MQ is supported */
+    dev->num_queue_pairs = 1;  /* Default to single queue */
+    dev->max_queue_pairs = 1;
+    if (has_mq) {
+        dev->max_queue_pairs = config->max_virtqueue_pairs;
+        /* Use all available queue pairs, up to our compile-time maximum */
+        if (dev->max_queue_pairs > VIRTIO_NET_MAX_QUEUE_PAIRS) {
+            dev->num_queue_pairs = VIRTIO_NET_MAX_QUEUE_PAIRS;
+        } else {
+            dev->num_queue_pairs = dev->max_queue_pairs;
+        }
+        printf(DRIVERNAME ": max_virtqueue_pairs=%d, using %d queue pair(s)\n",
+               dev->max_queue_pairs, dev->num_queue_pairs);
+    } else {
+        printf(DRIVERNAME ": Single queue mode (MQ not available)\n");
     }
-    printf(DRIVERNAME ": Step 9 - RX queue initialized\n");
 
-    printf(DRIVERNAME ": Step 10 - Initializing TX queue...\n");
-    if (virtio_net_init_queue(dev, VIRTIO_NET_TX_QUEUE,
-                               &dev->tx_desc, &dev->tx_avail, &dev->tx_used) < 0) {
-        printf(DRIVERNAME ": TX queue init failed\n");
-        return -1;
-    }
-    printf(DRIVERNAME ": Step 10 - TX queue initialized\n");
+    /* Initialize queue pairs */
+    printf(DRIVERNAME ": Step 9 - Initializing %d queue pair(s)...\n", dev->num_queue_pairs);
+    for (i = 0; i < dev->num_queue_pairs; i++) {
+        struct virtio_net_queue_pair *qp = &dev->queue_pairs[i];
+        qp->dev = dev;
+        qp->queue_pair_index = i;
 
-    /* Allocate TX buffers */
-    for (i = 0; i < VIRTIO_NET_QUEUE_SIZE; i++) {
-        dev->tx_buffers[i] = (u8 *)malloc(PKTSIZE_ALIGN + sizeof(struct virtio_net_hdr));
-        if (!dev->tx_buffers[i]) {
-            printf(DRIVERNAME ": Failed to allocate TX buffer %d\n", i);
+        /* Initialize RX queue (even indices: 0, 2, 4, 6) */
+        int rx_queue_num = i * 2;
+        printf(DRIVERNAME ": Initializing RX queue %d (pair %d)...\n", rx_queue_num, i);
+        if (virtio_net_init_queue(dev, rx_queue_num,
+                                   &qp->rx_desc, &qp->rx_avail, &qp->rx_used) < 0) {
+            printf(DRIVERNAME ": RX queue %d init failed\n", rx_queue_num);
             return -1;
         }
+
+        /* Allocate RX buffers and setup descriptors for this queue pair */
+        for (int j = 0; j < VIRTIO_NET_QUEUE_SIZE; j++) {
+            qp->rx_buffers[j] = (u8 *)malloc(PKTSIZE_ALIGN + sizeof(struct virtio_net_hdr));
+            if (!qp->rx_buffers[j]) {
+                printf(DRIVERNAME ": Failed to allocate RX buffer %d for pair %d\n", j, i);
+                return -1;
+            }
+
+            /* Setup RX descriptor */
+            qp->rx_desc[j].addr = virt_to_phys(qp->rx_buffers[j]);
+            qp->rx_desc[j].len = PKTSIZE_ALIGN + sizeof(struct virtio_net_hdr);
+            qp->rx_desc[j].flags = VRING_DESC_F_WRITE;
+            qp->rx_desc[j].next = 0;
+
+            /* Add to available ring */
+            qp->rx_avail->ring[j] = j;
+        }
+        qp->rx_avail->idx = VIRTIO_NET_QUEUE_SIZE;
+
+        /* Kick the device so it notices newly available RX buffers */
+        virtio_mmio_write(dev, VIRTIO_MMIO_QUEUE_NOTIFY, rx_queue_num);
+
+        /* Initialize TX queue (odd indices: 1, 3, 5, 7) */
+        int tx_queue_num = i * 2 + 1;
+        printf(DRIVERNAME ": Initializing TX queue %d (pair %d)...\n", tx_queue_num, i);
+        if (virtio_net_init_queue(dev, tx_queue_num,
+                                   &qp->tx_desc, &qp->tx_avail, &qp->tx_used) < 0) {
+            printf(DRIVERNAME ": TX queue %d init failed\n", tx_queue_num);
+            return -1;
+        }
+
+        /* Allocate TX buffers for this queue pair */
+        for (int j = 0; j < VIRTIO_NET_QUEUE_SIZE; j++) {
+            qp->tx_buffers[j] = (u8 *)malloc(PKTSIZE_ALIGN + sizeof(struct virtio_net_hdr));
+            if (!qp->tx_buffers[j]) {
+                printf(DRIVERNAME ": Failed to allocate TX buffer %d for pair %d\n", j, i);
+                return -1;
+            }
+        }
+
+        qp->rx_last_used = 0;
+        qp->tx_last_used = 0;
+        qp->rx_pkt_queue_head = 0;
+        qp->rx_pkt_queue_tail = 0;
+    }
+    printf(DRIVERNAME ": Step 9 - Queue pairs initialized\n");
+
+    /* Initialize control queue if MQ is enabled */
+    bool need_mq_cmd = false;
+    if (has_mq && dev->num_queue_pairs > 1) {
+        int ctrl_queue_num = VIRTIO_NET_CTRL_QUEUE(dev->num_queue_pairs);
+        printf(DRIVERNAME ": Step 10 - Initializing control queue %d...\n", ctrl_queue_num);
+        if (virtio_net_init_queue(dev, ctrl_queue_num,
+                                   &dev->ctrl_desc, &dev->ctrl_avail, &dev->ctrl_used) < 0) {
+            printf(DRIVERNAME ": Control queue init failed\n");
+            return -1;
+        }
+        dev->ctrl_last_used = 0;
+
+        /* Allocate control buffer */
+        dev->ctrl_buffer = (u8 *)malloc(512);
+        if (!dev->ctrl_buffer) {
+            printf(DRIVERNAME ": Failed to allocate control buffer\n");
+            return -1;
+        }
+        printf(DRIVERNAME ": Step 10 - Control queue initialized\n");
+        need_mq_cmd = true;
     }
 
-    dev->rx_last_used = 0;
-    dev->tx_last_used = 0;
+    /* Create RX tasks for each queue pair */
+    printf(DRIVERNAME ": Creating RX processing tasks...\n");
+    for (i = 0; i < dev->num_queue_pairs; i++) {
+        struct virtio_net_queue_pair *qp = &dev->queue_pairs[i];
 
-    /* Initialize RX packet queue */
-    dev->rx_pkt_queue_head = 0;
-    dev->rx_pkt_queue_tail = 0;
+        /* Create semaphore for this queue pair */
+        qp->rx_sem = OSSemCreate(0);
+        if (!qp->rx_sem) {
+            printf(DRIVERNAME ": Failed to create RX semaphore for pair %d\n", i);
+            return -1;
+        }
 
-    /* Create semaphore for RX task wakeup */
-    dev->rx_sem = OSSemCreate(0);
-    if (!dev->rx_sem) {
-        printf(DRIVERNAME ": Failed to create RX semaphore\n");
-        return -1;
+        /* Allocate stack for RX task (8KB) */
+        qp->rx_task_stack = (OS_STK *)malloc(8192);
+        if (!qp->rx_task_stack) {
+            printf(DRIVERNAME ": Failed to allocate RX task stack for pair %d\n", i);
+            return -1;
+        }
+
+        /* Create RX processing task with unique priority
+         * Base priority 10 + device_index * 10 + queue_pair_index */
+        qp->rx_task_prio = 10 + (u8)virtio_net_device_count * 10 + i;
+        INT8U err = OSTaskCreate(virtio_net_rx_task,
+                                 (void *)qp,
+                                 &qp->rx_task_stack[8192/sizeof(OS_STK) - 1],
+                                 qp->rx_task_prio);
+        if (err != OS_ERR_NONE) {
+            printf(DRIVERNAME ": Failed to create RX task for pair %d (err=%d)\n", i, err);
+            return -1;
+        }
+        printf(DRIVERNAME ": RX task created for queue pair %d (priority %d)\n",
+               i, qp->rx_task_prio);
     }
-    printf(DRIVERNAME ": RX semaphore created\n");
 
-    /* Allocate stack for RX task (8KB) */
-    dev->rx_task_stack = (OS_STK *)malloc(8192);
-    if (!dev->rx_task_stack) {
-        printf(DRIVERNAME ": Failed to allocate RX task stack\n");
-        return -1;
-    }
-
-    /* Create RX processing task with unique priority for each device
-     * Priority 10 + device index (higher priority = lower number) */
-    dev->rx_task_prio = 10 + (u8)virtio_net_device_count;
-    INT8U err = OSTaskCreate(virtio_net_rx_task,
-                             (void *)dev,
-                             &dev->rx_task_stack[8192/sizeof(OS_STK) - 1],
-                             dev->rx_task_prio);
-    if (err != OS_ERR_NONE) {
-        printf(DRIVERNAME ": Failed to create RX task (err=%d)\n", err);
-        return -1;
-    }
-    printf(DRIVERNAME ": RX processing task created (priority %d)\n", dev->rx_task_prio);
+    /* Initialize round-robin TX queue selection */
+    dev->current_tx_queue = 0;
 
     /* Set DRIVER_OK status - write ALL status bits cumulatively */
     printf(DRIVERNAME ": Step 11 - Setting DRIVER_OK...\n");
@@ -511,6 +671,20 @@ static int virtio_net_init_device(struct virtio_net_dev *dev)
     status = virtio_mmio_read(dev, VIRTIO_MMIO_STATUS);
     printf(DRIVERNAME ": Status after DRIVER_OK: 0x%x\n", status);
 
+    /* Now that device is live, send MQ command if needed */
+    if (need_mq_cmd) {
+        printf(DRIVERNAME ": Step 12 - Setting MQ queue pairs to %d...\n", dev->num_queue_pairs);
+        struct virtio_net_ctrl_mq mq_cmd;
+        mq_cmd.virtqueue_pairs = dev->num_queue_pairs;
+        if (virtio_net_send_ctrl_cmd(dev, VIRTIO_NET_CTRL_MQ,
+                                       VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET,
+                                       &mq_cmd, sizeof(mq_cmd)) < 0) {
+            printf(DRIVERNAME ": Failed to set MQ queue pairs\n");
+            return -1;
+        }
+        printf(DRIVERNAME ": Step 12 - MQ configured for %d queue pairs\n", dev->num_queue_pairs);
+    }
+
     printf(DRIVERNAME ": Device initialization complete (IRQ setup deferred)\n");
 
     return 0;
@@ -520,22 +694,42 @@ static int virtio_net_init_device(struct virtio_net_dev *dev)
 int virtio_net_send(struct eth_device *eth_dev, void *packet, int length)
 {
     struct virtio_net_dev *dev = (struct virtio_net_dev *)eth_dev;
+    struct virtio_net_queue_pair *qp;
     struct virtio_net_hdr *hdr;
     u8 *buf;
     u16 desc_idx;
     u16 tx_avail_idx;
     u16 in_flight;
+    int tx_queue_num;
+    u16 queue_idx;
 
-    tx_avail_idx = dev->tx_avail->idx;
+    /* Select queue pair based on packet hash to maintain per-flow ordering
+     * This prevents TCP out-of-order issues with multi-queue.
+     * For simplicity, use a simple hash of first few bytes (includes MAC/IP/port info) */
+    if (dev->num_queue_pairs > 1 && length >= 16) {
+        u32 hash = 0;
+        u8 *pkt = (u8 *)packet;
+        /* Simple hash: XOR of 4-byte words from packet header */
+        for (int i = 0; i < 16; i += 4) {
+            hash ^= *(u32 *)(&pkt[i]);
+        }
+        queue_idx = hash % dev->num_queue_pairs;
+    } else {
+        queue_idx = 0;  /* Single queue or short packet */
+    }
+
+    qp = &dev->queue_pairs[queue_idx];
+
+    tx_avail_idx = qp->tx_avail->idx;
 
     /* Reclaim descriptors completed by the device */
-    dev->tx_last_used = dev->tx_used->idx;
-    in_flight = (u16)(tx_avail_idx - dev->tx_last_used);
+    qp->tx_last_used = qp->tx_used->idx;
+    in_flight = (u16)(tx_avail_idx - qp->tx_last_used);
 
     /* Queue still full? refresh once more before dropping the packet */
     if (in_flight >= VIRTIO_NET_QUEUE_SIZE) {
-        dev->tx_last_used = dev->tx_used->idx;
-        in_flight = (u16)(tx_avail_idx - dev->tx_last_used);
+        qp->tx_last_used = qp->tx_used->idx;
+        in_flight = (u16)(tx_avail_idx - qp->tx_last_used);
         if (in_flight >= VIRTIO_NET_QUEUE_SIZE) {
             return -1;
         }
@@ -543,7 +737,7 @@ int virtio_net_send(struct eth_device *eth_dev, void *packet, int length)
 
     /* Get next available TX buffer */
     desc_idx = tx_avail_idx % VIRTIO_NET_QUEUE_SIZE;
-    buf = dev->tx_buffers[desc_idx];
+    buf = qp->tx_buffers[desc_idx];
 
     /* Prepare virtio_net header */
     hdr = (struct virtio_net_hdr *)buf;
@@ -554,66 +748,29 @@ int virtio_net_send(struct eth_device *eth_dev, void *packet, int length)
     memcpy(buf + sizeof(struct virtio_net_hdr), packet, length);
 
     /* Setup descriptor */
-    dev->tx_desc[desc_idx].addr = virt_to_phys(buf);
-    dev->tx_desc[desc_idx].len = length + sizeof(struct virtio_net_hdr);
-    dev->tx_desc[desc_idx].flags = 0;  /* Read-only for device */
-    dev->tx_desc[desc_idx].next = 0;
+    qp->tx_desc[desc_idx].addr = virt_to_phys(buf);
+    qp->tx_desc[desc_idx].len = length + sizeof(struct virtio_net_hdr);
+    qp->tx_desc[desc_idx].flags = 0;  /* Read-only for device */
+    qp->tx_desc[desc_idx].next = 0;
 
     /* Add to available ring */
-    dev->tx_avail->ring[desc_idx] = desc_idx;
-    dev->tx_avail->idx = tx_avail_idx + 1;
+    qp->tx_avail->ring[desc_idx] = desc_idx;
+    qp->tx_avail->idx = tx_avail_idx + 1;
 
-    /* Notify device */
-    virtio_mmio_write(dev, VIRTIO_MMIO_QUEUE_NOTIFY, VIRTIO_NET_TX_QUEUE);
+    /* Notify device - TX queue number is (queue_pair_index * 2 + 1) */
+    tx_queue_num = qp->queue_pair_index * 2 + 1;
+    virtio_mmio_write(dev, VIRTIO_MMIO_QUEUE_NOTIFY, tx_queue_num);
 
     /* Fire-and-forget: no waiting for completion! */
     return 0;
 }
 
-/* Receive packet */
+/* Receive packet - legacy polling interface (unused with task-based processing) */
 int virtio_net_rx(struct eth_device *eth_dev)
 {
-    struct virtio_net_dev *dev = (struct virtio_net_dev *)eth_dev;
-    u16 last_used = dev->rx_last_used;
-    struct vring_used_elem *elem;
-    struct virtio_net_hdr *hdr;
-    u8 *pkt;
-    u32 pktlen;
-
-    /* Check if we have received packets */
-    while (last_used != dev->rx_used->idx) {
-        elem = &dev->rx_used->ring[last_used % VIRTIO_NET_QUEUE_SIZE];
-
-        if (elem->len < sizeof(struct virtio_net_hdr)) {
-            last_used++;
-            continue;
-        }
-
-        hdr = (struct virtio_net_hdr *)dev->rx_buffers[elem->id];
-        pkt = (u8 *)hdr + sizeof(struct virtio_net_hdr);
-        pktlen = elem->len - sizeof(struct virtio_net_hdr);
-
-        /* Process packet */
-        if (pktlen > 0 && pktlen <= PKTSIZE_ALIGN) {
-            net_process_received_packet(pkt, pktlen);
-            dev->rx_packet_count++;
-        }
-
-        /* Recycle buffer - make it available again */
-        dev->rx_avail->ring[dev->rx_avail->idx % VIRTIO_NET_QUEUE_SIZE] = elem->id;
-        dev->rx_avail->idx++;
-
-        last_used++;
-    }
-
-    /* Notify device of new available buffers if we recycled any */
-    u16 rx_recycled = last_used - dev->rx_last_used;
-    if (rx_recycled > 0) {
-        virtio_mmio_write(dev, VIRTIO_MMIO_QUEUE_NOTIFY, VIRTIO_NET_RX_QUEUE);
-    }
-
-    dev->rx_last_used = last_used;
-
+    /* With multi-queue and task-based RX processing, packets are handled
+     * by the RX tasks woken up by the ISR. This function is kept for
+     * compatibility but is no longer used. */
     return 0;
 }
 

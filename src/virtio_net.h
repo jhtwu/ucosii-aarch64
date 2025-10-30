@@ -56,8 +56,16 @@
 /* VirtIO Feature Bits */
 #define VIRTIO_NET_F_CSUM               0   /* Host handles pkts w/ partial csum */
 #define VIRTIO_NET_F_GUEST_CSUM         1   /* Guest handles pkts w/ partial csum */
+#define VIRTIO_NET_F_CTRL_VQ            17  /* Control channel available */
 #define VIRTIO_NET_F_MAC                5   /* Host has given MAC address. */
 #define VIRTIO_NET_F_STATUS             16  /* virtio_net_config.status available */
+#define VIRTIO_NET_F_MQ                 22  /* Device supports multiple TXQ/RXQ */
+
+/* Control virtqueue commands */
+#define VIRTIO_NET_CTRL_MQ              4
+#define VIRTIO_NET_CTRL_MQ_VQ_PAIRS_SET 0
+#define VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MIN 1
+#define VIRTIO_NET_CTRL_MQ_VQ_PAIRS_MAX 0x8000
 
 /* VirtIO Net Config */
 struct virtio_net_config {
@@ -107,15 +115,38 @@ struct virtio_net_hdr {
     u16 num_buffers;
 } __attribute__((packed));
 
+/* Control virtqueue structures */
+struct virtio_net_ctrl_hdr {
+    u8 class;
+    u8 cmd;
+} __attribute__((packed));
+
+#define VIRTIO_NET_OK   0
+#define VIRTIO_NET_ERR  1
+
+struct virtio_net_ctrl_mq {
+    u16 virtqueue_pairs;
+} __attribute__((packed));
+
 /* Forward declarations for µC/OS-II types */
 struct os_event;
 typedef struct os_event OS_EVENT;
 typedef unsigned long long OS_STK;
 
-/* Queue sizes */
+/* Queue sizes and configuration */
 #define VIRTIO_NET_QUEUE_SIZE   64
+#define VIRTIO_NET_MAX_QUEUE_PAIRS  4  /* Maximum number of queue pairs */
+
+/* Queue indices for single-queue mode */
 #define VIRTIO_NET_RX_QUEUE     0
 #define VIRTIO_NET_TX_QUEUE     1
+
+/* For multi-queue:
+ * Queue 0, 2, 4, 6: RX queues
+ * Queue 1, 3, 5, 7: TX queues
+ * Queue N*2: Control queue (where N = num_queue_pairs)
+ */
+#define VIRTIO_NET_CTRL_QUEUE(n) ((n) * 2)
 
 /* RX packet queue for ISR to task communication */
 #define VIRTIO_NET_RX_PKT_QUEUE_SIZE  128
@@ -125,36 +156,27 @@ struct virtio_net_rx_pkt {
     u16 len;         /* Packet length (excluding virtio_net_hdr) */
 };
 
-/* VirtIO Net Device Structure */
-struct virtio_net_dev {
-    struct eth_device eth_dev;
+/* Forward declaration */
+struct virtio_net_dev;
 
-    /* MMIO base address */
-    unsigned long iobase;
+/* Per-queue pair structure */
+struct virtio_net_queue_pair {
+    /* Pointer to parent device */
+    struct virtio_net_dev *dev;
 
-    /* Queues */
+    /* RX queue */
     struct vring_desc *rx_desc;
     struct vring_avail *rx_avail;
     struct vring_used *rx_used;
+    u16 rx_last_used;
+    u8 *rx_buffers[VIRTIO_NET_QUEUE_SIZE];
 
+    /* TX queue */
     struct vring_desc *tx_desc;
     struct vring_avail *tx_avail;
     struct vring_used *tx_used;
-
-    /* Queue indices */
-    u16 rx_last_used;
     u16 tx_last_used;
-
-    /* Buffers */
-    u8 *rx_buffers[VIRTIO_NET_QUEUE_SIZE];
     u8 *tx_buffers[VIRTIO_NET_QUEUE_SIZE];
-
-    /* IRQ number for GICv3 */
-    u32 irq;
-
-    /* Diagnostic counts */
-    u32 irq_count;
-    u32 rx_packet_count;
 
     /* RX packet queue (ISR to task communication) */
     struct virtio_net_rx_pkt rx_pkt_queue[VIRTIO_NET_RX_PKT_QUEUE_SIZE];
@@ -167,6 +189,39 @@ struct virtio_net_dev {
     /* RX processing task */
     OS_STK *rx_task_stack;
     u8 rx_task_prio;
+
+    /* Queue pair index */
+    u16 queue_pair_index;
+};
+
+/* VirtIO Net Device Structure */
+struct virtio_net_dev {
+    struct eth_device eth_dev;
+
+    /* MMIO base address */
+    unsigned long iobase;
+
+    /* Multi-queue configuration */
+    u16 num_queue_pairs;         /* Number of active queue pairs (1 or more) */
+    u16 max_queue_pairs;         /* Maximum supported by device */
+    struct virtio_net_queue_pair queue_pairs[VIRTIO_NET_MAX_QUEUE_PAIRS];
+
+    /* Control queue */
+    struct vring_desc *ctrl_desc;
+    struct vring_avail *ctrl_avail;
+    struct vring_used *ctrl_used;
+    u16 ctrl_last_used;
+    u8 *ctrl_buffer;
+
+    /* IRQ number */
+    u32 irq;
+
+    /* Diagnostic counts */
+    u32 irq_count;
+    u32 rx_packet_count;
+
+    /* Current TX queue pair (round-robin) */
+    u16 current_tx_queue;
 };
 
 /* Register access functions */

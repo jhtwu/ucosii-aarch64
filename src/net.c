@@ -285,6 +285,15 @@ void net_process_received_packet_old(uchar *in_packet, int len)
 #endif
 }
 
+int eth_send(void *packet, int length)
+{
+	if (!eth_current || !eth_current->send) {
+		printf("[eth_send] No current device or send function!\n");
+		return -1;
+	}
+	return eth_current->send(eth_current, packet, length);
+}
+
 int eth_init()
 {
 	int rc;
