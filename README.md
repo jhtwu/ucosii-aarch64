@@ -1,5 +1,9 @@
 # ARMv8 Bare-Metal µC/OS Demo / ARMv8 裸機 µC/OS 示範專案
 
+[![CI/CD Pipeline](https://github.com/jhtwu/ucosii-aarch64/actions/workflows/ci.yml/badge.svg)](https://github.com/jhtwu/ucosii-aarch64/actions/workflows/ci.yml)
+[![Pull Request Checks](https://github.com/jhtwu/ucosii-aarch64/actions/workflows/pr-check.yml/badge.svg)](https://github.com/jhtwu/ucosii-aarch64/actions/workflows/pr-check.yml)
+[![Release](https://github.com/jhtwu/ucosii-aarch64/actions/workflows/release.yml/badge.svg)](https://github.com/jhtwu/ucosii-aarch64/actions/workflows/release.yml)
+
 ## Overview / 專案簡介
 This repository contains a bare-metal firmware project targeting ARMv8-A (Cortex-A57) hardware. It brings up Micrium µC/OS-II on top of a minimal board support package and demonstrates task scheduling, interrupt handling, serial I/O, and basic networking peripherals under QEMU.
 

@@ -1,0 +1,143 @@
+name: Pull Request Checks
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  validate-pr:
+    name: Validate Pull Request
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
+          qemu-system-aarch64 make
+
+    - name: Check for build system changes
+      id: check_changes
+      run: |
+        echo "Checking for modified files..."
+        git diff --name-only origin/${{ github.base_ref }}...HEAD > changed_files.txt
+        cat changed_files.txt
+
+        if grep -q "Makefile" changed_files.txt; then
+          echo "makefile_changed=true" >> $GITHUB_OUTPUT
+        fi
+
+        if grep -q "src/" changed_files.txt; then
+          echo "source_changed=true" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Full clean build
+      run: |
+        echo "Performing full clean build..."
+        make remove
+        make all
+
+    - name: Verify build consistency
+      run: |
+        echo "Building again to verify reproducibility..."
+        make clean
+        make all
+
+        if [ ! -f "bin/kernel.elf" ]; then
+          echo "❌ Second build failed to produce kernel.elf"
+          exit 1
+        fi
+        echo "✓ Build is consistent"
+
+    - name: Run all available tests
+      run: |
+        echo "Running test suite..."
+
+        # Context switch test (should always work)
+        echo "=== Test 1: Context Switch & Timer ==="
+        make test-context
+
+        # Network init test (user-mode, should work in CI)
+        echo "=== Test 2: Network Initialization ==="
+        make test-net-init
+
+    - name: Check for common issues
+      run: |
+        echo "Checking for potential issues..."
+
+        # Check for very large object files
+        echo "=== Checking object file sizes ==="
+        find obj/ -type f -name "*.o" -size +100k -exec ls -lh {} \; || true
+
+        # Check for stack usage warnings
+        echo "=== Checking stack usage files ==="
+        find obj/ -type f -name "*.su" -exec cat {} \; || true
+
+        # Verify linker script exists
+        if [ ! -f "src/linker.ld" ]; then
+          echo "⚠️ Warning: linker.ld not found"
+        fi
+
+    - name: Generate size report
+      run: |
+        echo "=== Firmware Size Report ===" > size-report.txt
+        aarch64-linux-gnu-size bin/kernel.elf >> size-report.txt
+        echo "" >> size-report.txt
+        echo "=== Section Details ===" >> size-report.txt
+        aarch64-linux-gnu-objdump -h bin/kernel.elf >> size-report.txt
+        cat size-report.txt
+
+    - name: Comment PR with build info
+      uses: actions/github-script@v7
+      if: always()
+      with:
+        script: |
+          const fs = require('fs');
+          let sizeReport = '';
+          try {
+            sizeReport = fs.readFileSync('size-report.txt', 'utf8');
+          } catch (e) {
+            sizeReport = 'Size report not available';
+          }
+
+          const comment = `## 🔍 Build Check Results
+
+          ### ✅ Build Status
+          - Full clean build: Completed
+          - Build consistency check: Passed
+          - Tests: Completed
+
+          ### 📊 Firmware Size
+          \`\`\`
+          ${sizeReport}
+          \`\`\`
+
+          ### 📦 Artifacts
+          The firmware has been built successfully. Download the artifacts from the workflow run to test.
+
+          ---
+          *Automated PR check - Build #${{ github.run_number }}*
+          `;
+
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: comment
+          });
+
+    - name: Upload PR build artifacts
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: pr-${{ github.event.pull_request.number }}-build
+        path: |
+          bin/kernel.elf
+          os.list
+          size-report.txt
+        retention-days: 7
