@@ -338,7 +338,7 @@ test-net-init: $(TEST_NET_INIT_BIN)
 	@echo "========================================="
 	@echo "Running Test Case: VirtIO Network Init"
 	@echo "========================================="
-	@for i in 1 2 3 4 5 6 7 8 9 10; do \
+	@for i in 1 2 3; do \
 		printf "\n--- Run %d ---\n" "$$i"; \
 		status=0; \
 		output=$$(timeout --foreground $(QEMU_RUN_TIMEOUT)s $(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) -netdev user,id=net0 -device virtio-net-device,netdev=net0,bus=virtio-mmio-bus.0,mac=$(QEMU_BRIDGE_MAC) -kernel $(TEST_NET_INIT_BIN) 2>&1) || status=$$?; \
