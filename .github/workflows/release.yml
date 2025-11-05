@@ -1,0 +1,116 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., v1.0.0)'
+        required: true
+        type: string
+
+jobs:
+  build-and-release:
+    name: Build and Create Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install AArch64 cross-compilation toolchain
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu make
+
+    - name: Build firmware
+      run: |
+        make clean
+        make all
+
+    - name: Build all test binaries
+      run: |
+        make test-context
+        make test-net-init
+        make test-ping || true
+        make test-ping-wan || true
+
+    - name: Get version
+      id: get_version
+      run: |
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          echo "VERSION=${{ inputs.version }}" >> $GITHUB_OUTPUT
+        else
+          echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Create build info
+      run: |
+        echo "Build Information" > build-info.txt
+        echo "=================" >> build-info.txt
+        echo "Version: ${{ steps.get_version.outputs.VERSION }}" >> build-info.txt
+        echo "Commit: ${GITHUB_SHA}" >> build-info.txt
+        echo "Build Date: $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> build-info.txt
+        echo "" >> build-info.txt
+        echo "Firmware Details:" >> build-info.txt
+        aarch64-linux-gnu-size bin/kernel.elf >> build-info.txt
+        echo "" >> build-info.txt
+        echo "File Information:" >> build-info.txt
+        file bin/kernel.elf >> build-info.txt
+
+    - name: Package release artifacts
+      run: |
+        mkdir -p release
+        cp bin/kernel.elf release/
+        cp os.list release/
+        cp build-info.txt release/
+        if [ -d test_bin ]; then
+          cp -r test_bin release/ || true
+        fi
+        cd release
+        tar -czf ../ucosii-aarch64-${{ steps.get_version.outputs.VERSION }}.tar.gz *
+        cd ..
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+      with:
+        tag_name: ${{ steps.get_version.outputs.VERSION }}
+        name: Release ${{ steps.get_version.outputs.VERSION }}
+        body: |
+          ## ARMv8 Bare-Metal µC/OS-II Release ${{ steps.get_version.outputs.VERSION }}
+
+          ### 📦 Artifacts Included
+          - `kernel.elf` - Main firmware binary
+          - `os.list` - Disassembly listing
+          - `test_bin/` - Test binaries (if available)
+          - `build-info.txt` - Build information
+
+          ### 🚀 Quick Start
+          ```bash
+          # Extract the release
+          tar -xzf ucosii-aarch64-${{ steps.get_version.outputs.VERSION }}.tar.gz
+
+          # Run in QEMU
+          qemu-system-aarch64 -M virt,gic_version=2 -nographic -serial mon:stdio \
+            -cpu cortex-a57 -smp 1 -m 2048M \
+            -kernel kernel.elf
+          ```
+
+          ### 📝 Build Details
+          - **Commit**: ${{ github.sha }}
+          - **Build Date**: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          - **Toolchain**: gcc-aarch64-linux-gnu
+
+          For more information, see the [README](https://github.com/${{ github.repository }}/blob/main/README.md).
+        files: |
+          ucosii-aarch64-${{ steps.get_version.outputs.VERSION }}.tar.gz
+          release/kernel.elf
+          release/os.list
+          release/build-info.txt
+        draft: false
+        prerelease: false

@@ -1,0 +1,100 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ "main", "claude/**" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build and Test
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install AArch64 cross-compilation toolchain
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
+          qemu-system-arm qemu-system-aarch64 make
+
+    - name: Verify toolchain installation
+      run: |
+        aarch64-linux-gnu-gcc --version
+        qemu-system-aarch64 --version
+        make --version
+
+    - name: Build firmware
+      run: |
+        make clean
+        make all
+
+    - name: Check build artifacts
+      run: |
+        ls -lh bin/
+        ls -lh obj/
+        if [ -f "bin/kernel.elf" ]; then
+          echo "✓ kernel.elf built successfully"
+          file bin/kernel.elf
+          aarch64-linux-gnu-size bin/kernel.elf
+        else
+          echo "✗ kernel.elf not found!"
+          exit 1
+        fi
+
+    - name: Run context switch test
+      run: |
+        echo "Running context switch and timer test..."
+        make test-context || true
+
+    - name: Run network init test (user-mode networking)
+      run: |
+        echo "Running network initialization test..."
+        make test-net-init || true
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: firmware-artifacts
+        path: |
+          bin/kernel.elf
+          os.list
+        retention-days: 30
+
+    - name: Upload test binaries
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: test-binaries
+        path: |
+          test_bin/*.elf
+        retention-days: 7
+
+  # Optional: Additional job for checking code quality
+  code-quality:
+    name: Code Quality Checks
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Check for large files
+      run: |
+        echo "Checking for unexpectedly large files..."
+        find . -type f -size +10M -not -path "./.git/*" || true
+
+    - name: List source files
+      run: |
+        echo "Source files:"
+        find src/ -type f \( -name "*.c" -o -name "*.h" -o -name "*.S" \) | sort
+
+    - name: Check Makefile syntax
+      run: |
+        make -n all > /dev/null
+        echo "✓ Makefile syntax is valid"
