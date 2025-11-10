@@ -120,8 +120,9 @@ else ifeq ($(KVM_AVAILABLE),yes)
     VHOST_WARNING = yes
 else
     # Software emulation: conservative settings / 軟體模擬：保守設定
+    # Note: Use tx/rx_queue_size=256 for compatibility with older QEMU versions
     NETDEV_PERF_FLAGS =
-    VIRTIO_PERF_FLAGS = mrg_rxbuf=on,event_idx=on,tx_queue_size=512,rx_queue_size=512
+    VIRTIO_PERF_FLAGS = mrg_rxbuf=on,event_idx=on,tx_queue_size=256,rx_queue_size=256
     NET_ACCEL_STATUS = Software emulation
 endif
 
