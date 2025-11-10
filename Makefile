@@ -150,11 +150,12 @@ CORE_OBJECTS = $(filter-out $(APP_OBJECT), $(OBJECTS_ALL))
 TESTDIR            = test
 TEST_OBJDIR        = test_build
 TEST_SUPPORT       = test_support
-TEST_NAMES         = test_context_timer test_network_init test_network_ping test_network_ping_wan test_udp_flood test_nat_icmp test_nat_udp
+TEST_NAMES         = test_context_timer test_network_init test_network_ping test_network_ping_lan test_network_ping_wan test_udp_flood test_nat_icmp test_nat_udp
 TEST_SUPPORT_OBJ   = $(addprefix $(TEST_OBJDIR)/,$(addsuffix .o,$(TEST_SUPPORT)))
 TEST_PROGRAM_OBJS  = $(addprefix $(TEST_OBJDIR)/,$(addsuffix .o,$(TEST_NAMES)))
 TEST_CONTEXT_NAME  = test_context_timer
 TEST_PING_NAME     = test_network_ping
+TEST_PING_LAN_NAME = test_network_ping_lan
 TEST_PING_WAN_NAME = test_network_ping_wan
 TEST_NET_INIT_NAME = test_network_init
 TEST_NAT_ICMP_NAME = test_nat_icmp
@@ -162,6 +163,7 @@ TEST_NAT_UDP_NAME  = test_nat_udp
 TEST_BINDIR        = test_bin
 TEST_CONTEXT_BIN   = $(TEST_BINDIR)/$(TEST_CONTEXT_NAME).elf
 TEST_PING_BIN      = $(TEST_BINDIR)/$(TEST_PING_NAME).elf
+TEST_PING_LAN_BIN  = $(TEST_BINDIR)/$(TEST_PING_LAN_NAME).elf
 TEST_PING_WAN_BIN  = $(TEST_BINDIR)/$(TEST_PING_WAN_NAME).elf
 TEST_NET_INIT_BIN  = $(TEST_BINDIR)/$(TEST_NET_INIT_NAME).elf
 TEST_NAT_ICMP_BIN  = $(TEST_BINDIR)/$(TEST_NAT_ICMP_NAME).elf
@@ -172,7 +174,7 @@ rm           = rm -f
 # ======================================================================================
 # Phony Targets / 虛擬目標宣告
 # ======================================================================================
-.PHONY: all clean remove run qemu qemu_gdb qemu-gdb gdb dqemu setup-network setup-mq-tap help test test-context test-net-init test-ping test-ping-wan test-dual test-nat-icmp test-nat-udp
+.PHONY: all clean remove run qemu qemu_gdb qemu-gdb gdb dqemu setup-network setup-mq-tap help test test-context test-net-init test-ping test-ping-lan test-ping-wan test-dual test-nat-icmp test-nat-udp
 
 # ======================================================================================
 # Default Build Target / 預設建置目標
@@ -352,6 +354,23 @@ test-net-init: $(TEST_NET_INIT_BIN)
 		done; \
 	echo ""; \
 	echo "✓ ALL RUNS PASSED";
+
+test-ping-lan: $(TEST_PING_LAN_BIN)
+	@echo "========================================="
+	@echo "Running Test Case: LAN Ping (User-mode)"
+	@echo "========================================="
+	@status=0; \
+	output=$$(timeout --foreground $(QEMU_RUN_TIMEOUT)s $(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) -netdev user,id=net0 -device virtio-net-device,netdev=net0,bus=virtio-mmio-bus.0,mac=$(QEMU_BRIDGE_MAC) -kernel $(TEST_PING_LAN_BIN) 2>&1) || status=$$?; \
+	echo "$$output"; \
+	if echo "$$output" | grep -q "\[PASS\]"; then \
+		echo ""; echo "✓ LAN PING TEST PASSED"; exit 0; \
+	elif echo "$$output" | grep -q "\[FAIL\]"; then \
+		echo ""; echo "✗ LAN PING TEST FAILED"; exit 1; \
+	elif [ $$status -eq 124 ]; then \
+		echo ""; echo "⚠ LAN PING TEST TIMED OUT (no PASS marker)"; exit 1; \
+	else \
+		exit $$status; \
+	fi
 
 test-ping: $(TEST_PING_BIN)
 	@echo "========================================="

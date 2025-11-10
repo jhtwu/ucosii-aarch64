@@ -69,6 +69,10 @@ jobs:
         echo "=== Test 2: Network Initialization ==="
         make test-net-init
 
+        # LAN ping test (user-mode, should work in CI)
+        echo "=== Test 3: LAN Ping ==="
+        make test-ping-lan
+
     - name: Check for common issues
       run: |
         echo "Checking for potential issues..."

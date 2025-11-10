@@ -56,6 +56,11 @@ jobs:
         echo "Running network initialization test..."
         make test-net-init || true
 
+    - name: Run LAN ping test (user-mode networking)
+      run: |
+        echo "Running LAN ping test..."
+        make test-ping-lan
+
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       if: always()
