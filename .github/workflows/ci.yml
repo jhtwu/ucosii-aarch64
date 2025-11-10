@@ -85,6 +85,35 @@ jobs:
           exit 1;
         }
 
+    - name: Setup TAP network for WAN ping test
+      run: |
+        echo "Setting up WAN TAP network interface for ping test..."
+        echo "Host IP: 10.3.5.103, Guest IP: 10.3.5.99"
+        sudo ip tuntap add dev qemu-wan mode tap user $USER
+        sudo ip addr add 10.3.5.103/24 dev qemu-wan
+        sudo ip link set qemu-wan up
+
+        echo "Verifying WAN TAP interface setup..."
+        ip addr show qemu-wan
+        ip link show qemu-wan
+
+        echo "Testing host can ping itself on WAN TAP interface..."
+        ping -c 2 -W 1 10.3.5.103 || echo "Note: Self-ping failed, but TAP is up"
+
+        echo "Checking routing..."
+        ip route | grep 10.3.5 || echo "No route to 10.3.5.0/24"
+
+    - name: Run WAN ping test (TAP bridge networking)
+      run: |
+        echo "Running WAN ping test (Guest 10.3.5.99 -> Host 10.3.5.103)..."
+        echo "If this fails, check the WAN TAP network setup above"
+        make test-ping-wan || {
+          echo "WAN ping test failed - checking network state...";
+          ip addr show qemu-wan;
+          ip link show qemu-wan;
+          exit 1;
+        }
+
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       if: always()
