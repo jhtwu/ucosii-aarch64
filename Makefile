@@ -357,15 +357,32 @@ test-net-init: $(TEST_NET_INIT_BIN)
 
 test-ping-lan: $(TEST_PING_LAN_BIN)
 	@echo "========================================="
-	@echo "Running Test Case: LAN Ping (User-mode)"
+	@echo "Running Test Case: LAN Ping to 192.168.1.1"
 	@echo "========================================="
-	@status=0; \
-	output=$$(timeout --foreground $(QEMU_RUN_TIMEOUT)s $(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) -netdev user,id=net0 -device virtio-net-device,netdev=net0,bus=virtio-mmio-bus.0,mac=$(QEMU_BRIDGE_MAC) -kernel $(TEST_PING_LAN_BIN) 2>&1) || status=$$?; \
+	if ! ip link show $(QEMU_BRIDGE_TAP) >/dev/null 2>&1; then \
+		echo "[SKIP] TAP interface '$(QEMU_BRIDGE_TAP)' not available"; \
+		echo "      Create it with: sudo ip tuntap add dev $(QEMU_BRIDGE_TAP) mode tap user $$USER"; \
+		echo "      Note: This test requires TAP bridge networking"; \
+		exit 0; \
+	fi; \
+	status=0; \
+	output=$$(timeout --foreground $(QEMU_RUN_TIMEOUT)s $(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) $(QEMU_BRIDGE_FLAGS) -kernel $(TEST_PING_LAN_BIN) 2>&1) || status=$$?; \
+	if echo "$$output" | grep -qi "could not open /dev/net/tun"; then \
+		echo "[SKIP] Access to /dev/net/tun denied."; \
+		echo "      Options: run 'sudo setcap cap_net_admin+ep $$(command -v $(QEMU))'"; \
+		echo "      or execute this target via sudo."; \
+		exit 0; \
+	fi; \
+	if echo "$$output" | grep -q "Could not set up host tap"; then \
+		echo "[FAIL] Unable to access TAP interface '$(QEMU_BRIDGE_TAP)'"; \
+		echo "      Ensure it exists and is configured properly"; \
+		exit 1; \
+	fi; \
 	echo "$$output"; \
 	if echo "$$output" | grep -q "\[PASS\]"; then \
-		echo ""; echo "✓ LAN PING TEST PASSED"; exit 0; \
+		echo ""; echo "✓ LAN PING TEST PASSED - 192.168.1.1 is reachable"; exit 0; \
 	elif echo "$$output" | grep -q "\[FAIL\]"; then \
-		echo ""; echo "✗ LAN PING TEST FAILED"; exit 1; \
+		echo ""; echo "✗ LAN PING TEST FAILED - 192.168.1.1 is unreachable"; exit 1; \
 	elif [ $$status -eq 124 ]; then \
 		echo ""; echo "⚠ LAN PING TEST TIMED OUT (no PASS marker)"; exit 1; \
 	else \

@@ -15,13 +15,20 @@
 
 static OS_STK net_task_stack[NET_STACK_SIZE];
 
-// Use QEMU user-mode networking default gateway
-// Guest IP: 10.0.2.15 (QEMU user-mode default)
-// Host IP: 10.0.2.2 (QEMU user-mode gateway)
+// LAN network configuration (TAP bridge mode)
+// Default target: 192.168.1.1 (can be overridden via compile-time defines)
+#ifndef LAN_TARGET_IP
+#define LAN_TARGET_IP {192u, 168u, 1u, 1u}
+#endif
+
+#ifndef LAN_GUEST_IP
+#define LAN_GUEST_IP {192u, 168u, 1u, 103u}
+#endif
+
 static const struct net_ping_target lan_target = {
-    .name = "LAN Gateway",
-    .guest_ip = {10u, 0u, 2u, 15u},
-    .host_ip = {10u, 0u, 2u, 2u},
+    .name = "LAN",
+    .guest_ip = LAN_GUEST_IP,
+    .host_ip = LAN_TARGET_IP,
     .device_index = 0u,
 };
 
@@ -43,11 +50,11 @@ static void net_test_task(void *p_arg)
 
     BSP_OS_TmrTickInit(1000u);
 
-    printf("Testing LAN connectivity by pinging gateway at 10.0.2.2\n");
+    printf("Testing LAN connectivity by pinging 192.168.1.1\n");
     if (net_ping_run(&lan_target, 4u, NULL) == 0) {
-        printf("[PASS] LAN ping test completed - Gateway reachable\n");
+        printf("[PASS] LAN ping test completed - 192.168.1.1 is reachable\n");
     } else {
-        printf("[FAIL] LAN ping test failed - Gateway unreachable\n");
+        printf("[FAIL] LAN ping test failed - 192.168.1.1 is unreachable\n");
     }
 
 wait_forever:
@@ -61,7 +68,7 @@ int main(void)
     INT8U err;
 
     printf("\n========================================\n");
-    printf("Test Case: LAN Ping (User-mode Network)\n");
+    printf("Test Case: LAN Ping to 192.168.1.1\n");
     printf("========================================\n");
 
     CPU_Init();

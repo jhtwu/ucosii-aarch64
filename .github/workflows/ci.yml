@@ -56,9 +56,17 @@ jobs:
         echo "Running network initialization test..."
         make test-net-init || true
 
-    - name: Run LAN ping test (user-mode networking)
+    - name: Setup TAP network for LAN ping test
       run: |
-        echo "Running LAN ping test..."
+        echo "Setting up TAP network interface for ping test..."
+        sudo ip tuntap add dev qemu-lan mode tap user $USER
+        sudo ip addr add 192.168.1.1/24 dev qemu-lan
+        sudo ip link set qemu-lan up
+        ip addr show qemu-lan
+
+    - name: Run LAN ping test (TAP bridge networking)
+      run: |
+        echo "Running LAN ping test to 192.168.1.1..."
         make test-ping-lan
 
     - name: Upload build artifacts
