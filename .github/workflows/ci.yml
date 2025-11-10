@@ -59,8 +59,9 @@ jobs:
     - name: Setup TAP network for LAN ping test
       run: |
         echo "Setting up TAP network interface for ping test..."
+        echo "Host IP: 192.168.1.103, Guest IP: 192.168.1.1"
         sudo ip tuntap add dev qemu-lan mode tap user $USER
-        sudo ip addr add 192.168.1.1/24 dev qemu-lan
+        sudo ip addr add 192.168.1.103/24 dev qemu-lan
         sudo ip link set qemu-lan up
 
         echo "Verifying TAP interface setup..."
@@ -68,14 +69,14 @@ jobs:
         ip link show qemu-lan
 
         echo "Testing host can ping itself on TAP interface..."
-        ping -c 2 -W 1 192.168.1.1 || echo "Note: Self-ping failed, but TAP is up"
+        ping -c 2 -W 1 192.168.1.103 || echo "Note: Self-ping failed, but TAP is up"
 
         echo "Checking routing..."
         ip route | grep 192.168.1 || echo "No route to 192.168.1.0/24"
 
     - name: Run LAN ping test (TAP bridge networking)
       run: |
-        echo "Running LAN ping test to 192.168.1.1..."
+        echo "Running LAN ping test (Guest 192.168.1.1 -> Host 192.168.1.103)..."
         echo "If this fails, check the TAP network setup above"
         make test-ping-lan || {
           echo "LAN ping test failed - checking network state...";

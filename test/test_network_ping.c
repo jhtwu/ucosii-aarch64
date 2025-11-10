@@ -9,16 +9,20 @@
 #include <stdbool.h>
 
 #include "net_ping.h"
+#include "test_network_config.h"
 
 #define NET_TASK_PRIO    5u
 #define NET_STACK_SIZE   4096u
 
 static OS_STK net_task_stack[NET_STACK_SIZE];
 
+// LAN network configuration (TAP bridge mode)
+// Guest: 192.168.1.1 (ucOS-II in QEMU)
+// Host:  192.168.1.103 (Linux TAP interface)
 static const struct net_ping_target lan_target = {
     .name = "LAN",
-    .guest_ip = {192u, 168u, 1u, 1u},
-    .host_ip = {192u, 168u, 1u, 103u},
+    .guest_ip = LAN_GUEST_IP,
+    .host_ip = LAN_HOST_IP,
     .device_index = 0u,
 };
 

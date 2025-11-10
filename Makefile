@@ -358,7 +358,7 @@ test-net-init: $(TEST_NET_INIT_BIN)
 
 test-ping-lan: $(TEST_PING_LAN_BIN)
 	@echo "========================================="
-	@echo "Running Test Case: LAN Ping to 192.168.1.1"
+	@echo "Running Test Case: LAN Ping (192.168.1.1 -> 192.168.1.103)"
 	@echo "========================================="
 	if ! ip link show $(QEMU_BRIDGE_TAP) >/dev/null 2>&1; then \
 		echo "[SKIP] TAP interface '$(QEMU_BRIDGE_TAP)' not available"; \
@@ -381,9 +381,9 @@ test-ping-lan: $(TEST_PING_LAN_BIN)
 	fi; \
 	echo "$$output"; \
 	if echo "$$output" | grep -q "\[PASS\]"; then \
-		echo ""; echo "✓ LAN PING TEST PASSED - 192.168.1.1 is reachable"; exit 0; \
+		echo ""; echo "✓ LAN PING TEST PASSED - 192.168.1.103 is reachable from 192.168.1.1"; exit 0; \
 	elif echo "$$output" | grep -q "\[FAIL\]"; then \
-		echo ""; echo "✗ LAN PING TEST FAILED - 192.168.1.1 is unreachable"; exit 1; \
+		echo ""; echo "✗ LAN PING TEST FAILED - 192.168.1.103 is unreachable from 192.168.1.1"; exit 1; \
 	elif [ $$status -eq 124 ]; then \
 		echo ""; echo "⚠ LAN PING TEST TIMED OUT (no PASS marker)"; exit 1; \
 	else \

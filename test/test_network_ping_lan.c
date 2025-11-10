@@ -9,6 +9,7 @@
 #include <stdbool.h>
 
 #include "net_ping.h"
+#include "test_network_config.h"
 
 #define NET_TASK_PRIO    5u
 #define NET_STACK_SIZE   4096u
@@ -16,19 +17,12 @@
 static OS_STK net_task_stack[NET_STACK_SIZE];
 
 // LAN network configuration (TAP bridge mode)
-// Default target: 192.168.1.1 (can be overridden via compile-time defines)
-#ifndef LAN_TARGET_IP
-#define LAN_TARGET_IP {192u, 168u, 1u, 1u}
-#endif
-
-#ifndef LAN_GUEST_IP
-#define LAN_GUEST_IP {192u, 168u, 1u, 103u}
-#endif
-
+// Guest: 192.168.1.1 (ucOS-II in QEMU)
+// Host:  192.168.1.103 (Linux TAP interface)
 static const struct net_ping_target lan_target = {
     .name = "LAN",
     .guest_ip = LAN_GUEST_IP,
-    .host_ip = LAN_TARGET_IP,
+    .host_ip = LAN_HOST_IP,
     .device_index = 0u,
 };
 
@@ -50,11 +44,11 @@ static void net_test_task(void *p_arg)
 
     BSP_OS_TmrTickInit(1000u);
 
-    printf("Testing LAN connectivity by pinging 192.168.1.1\n");
+    printf("Testing LAN connectivity (Guest: " LAN_GUEST_IP_STR " -> Host: " LAN_HOST_IP_STR ")\n");
     if (net_ping_run(&lan_target, 4u, NULL) == 0) {
-        printf("[PASS] LAN ping test completed - 192.168.1.1 is reachable\n");
+        printf("[PASS] LAN ping test completed - " LAN_HOST_IP_STR " is reachable\n");
     } else {
-        printf("[FAIL] LAN ping test failed - 192.168.1.1 is unreachable\n");
+        printf("[FAIL] LAN ping test failed - " LAN_HOST_IP_STR " is unreachable\n");
     }
 
 wait_forever:
@@ -68,7 +62,7 @@ int main(void)
     INT8U err;
 
     printf("\n========================================\n");
-    printf("Test Case: LAN Ping to 192.168.1.1\n");
+    printf("Test Case: LAN Ping (" LAN_GUEST_IP_STR " -> " LAN_HOST_IP_STR ")\n");
     printf("========================================\n");
 
     CPU_Init();
