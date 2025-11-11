@@ -114,6 +114,23 @@ jobs:
           exit 1;
         }
 
+    - name: Run NAT ping test (Dual TAP with NAT gateway)
+      run: |
+        echo "Running NAT ping test (LAN 192.168.1.100 -> NAT -> WAN 10.3.5.103)..."
+        echo "This test verifies NAT gateway functionality"
+        echo "Network topology:"
+        echo "  LAN: qemu-lan (192.168.1.103) <-> NAT Gateway (192.168.1.1/10.3.5.99)"
+        echo "  WAN: qemu-wan (10.3.5.103) <-> NAT Gateway (10.3.5.99)"
+        echo ""
+        make test-nat-ping || {
+          echo "NAT ping test failed - checking network state...";
+          ip addr show qemu-lan;
+          ip addr show qemu-wan;
+          ip link show qemu-lan;
+          ip link show qemu-wan;
+          exit 1;
+        }
+
     - name: Upload build artifacts
       uses: actions/upload-artifact@v4
       if: always()
