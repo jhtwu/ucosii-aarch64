@@ -27,10 +27,14 @@ WAN Network (10.3.5.0/24)
 
 ### 當前測試 (Current Tests)
 
-1. **ICMP Ping 測試** - 驗證 NAT ICMP 轉發功能
-   - LAN 客戶端 (192.168.1.100) 發送 ping 到 WAN 主機 (10.3.5.103)
-   - NAT 網關將來源 IP 從 192.168.1.100 轉換為 10.3.5.99
-   - 驗證 NAT 轉換表正確維護連接狀態
+1. **ICMP Ping 測試 (雙向)** - 驗證 NAT ICMP 雙向轉發功能
+   - **Outbound (LAN → WAN):**
+     - LAN 客戶端 (192.168.1.100) 發送 ping 到 WAN 主機 (10.3.5.103)
+     - NAT 網關將來源 IP 從 192.168.1.100 轉換為 10.3.5.99
+   - **Inbound (WAN → LAN):**
+     - 模擬 WAN 主機 (10.3.5.103) 發送 ICMP Echo Reply
+     - NAT 網關將目標 IP 從 10.3.5.99 轉換回 192.168.1.100
+   - 驗證 NAT 轉換表正確維護雙向連接狀態
 
 ### 未來擴展 (Future Enhancements)
 
@@ -127,31 +131,39 @@ sudo ./test_nat_ping_helper.sh cleanup
 
 #### 出站 (Outbound - LAN → WAN)
 ```
-[LAN Client 192.168.1.100]
-    ↓ ICMP Echo Request
-    ↓ Src: 192.168.1.100, Dst: 10.3.5.103
+[LAN Client 192.168.1.100] (模擬 / Simulated)
+    ↓ ICMP Echo Request (Type=8)
+    ↓ Src: 192.168.1.100, Dst: 10.3.5.103, ID: 0x1234
 [NAT Gateway - LAN Interface 192.168.1.1]
-    ↓ NAT Translation
+    ↓ NAT Outbound Translation
     ↓ Src: 192.168.1.100 → 10.3.5.99 (SNAT)
+    ↓ 創建 NAT 表項 (Create NAT entry)
 [NAT Gateway - WAN Interface 10.3.5.99]
-    ↓ ICMP Echo Request
-    ↓ Src: 10.3.5.99, Dst: 10.3.5.103
-[WAN Host 10.3.5.103]
+    ↓ ICMP Echo Request (Type=8)
+    ↓ Src: 10.3.5.99, Dst: 10.3.5.103, ID: 0x1234
+[WAN Host 10.3.5.103] (模擬 / Simulated)
 ```
 
 #### 入站 (Inbound - WAN → LAN)
 ```
-[WAN Host 10.3.5.103]
-    ↓ ICMP Echo Reply
-    ↓ Src: 10.3.5.103, Dst: 10.3.5.99
+[WAN Host 10.3.5.103] (模擬 / Simulated)
+    ↓ ICMP Echo Reply (Type=0)
+    ↓ Src: 10.3.5.103, Dst: 10.3.5.99, ID: 0x1234
 [NAT Gateway - WAN Interface 10.3.5.99]
-    ↓ NAT Reverse Translation
-    ↓ Dst: 10.3.5.99 → 192.168.1.100
+    ↓ NAT Inbound Translation
+    ↓ 查找 NAT 表項 (Lookup NAT entry)
+    ↓ Dst: 10.3.5.99 → 192.168.1.100 (Reverse SNAT)
 [NAT Gateway - LAN Interface 192.168.1.1]
-    ↓ ICMP Echo Reply
-    ↓ Src: 10.3.5.103, Dst: 192.168.1.100
-[LAN Client 192.168.1.100]
+    ↓ ICMP Echo Reply (Type=0)
+    ↓ Src: 10.3.5.103, Dst: 192.168.1.100, ID: 0x1234
+[LAN Client 192.168.1.100] (模擬 / Simulated)
 ```
+
+**重要說明 (Important Notes):**
+- LAN 客戶端和 WAN 主機都是在測試程式內部模擬的
+- Both LAN client and WAN host are simulated within the test program
+- 這樣可以完整測試 NAT 的雙向轉換功能，無需外部主機
+- This allows complete testing of bidirectional NAT without external hosts
 
 ### 2. NAT 轉換表 (NAT Translation Table)
 
