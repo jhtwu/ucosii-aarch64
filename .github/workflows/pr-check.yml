@@ -124,6 +124,20 @@ jobs:
           exit 1;
         }
 
+    - name: Run NAT ping test
+      run: |
+        echo "=== Test 5: NAT Ping (LAN client -> NAT gateway -> WAN host) ==="
+        echo "Network topology:"
+        echo "  LAN Client (192.168.1.100) -> NAT Gateway (192.168.1.1/10.3.5.99) -> WAN Host (10.3.5.103)"
+        make test-nat-ping || {
+          echo "NAT ping test failed - checking network state...";
+          ip addr show qemu-lan;
+          ip addr show qemu-wan;
+          ip link show qemu-lan;
+          ip link show qemu-wan;
+          exit 1;
+        }
+
     - name: Check for common issues
       run: |
         echo "Checking for potential issues..."

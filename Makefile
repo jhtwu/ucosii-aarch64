@@ -151,7 +151,7 @@ CORE_OBJECTS = $(filter-out $(APP_OBJECT), $(OBJECTS_ALL))
 TESTDIR            = test
 TEST_OBJDIR        = test_build
 TEST_SUPPORT       = test_support
-TEST_NAMES         = test_context_timer test_network_init test_network_ping_lan test_network_ping_wan test_udp_flood test_nat_icmp test_nat_udp
+TEST_NAMES         = test_context_timer test_network_init test_network_ping_lan test_network_ping_wan test_udp_flood test_nat_icmp test_nat_udp test_nat_ping
 TEST_SUPPORT_OBJ   = $(addprefix $(TEST_OBJDIR)/,$(addsuffix .o,$(TEST_SUPPORT)))
 TEST_PROGRAM_OBJS  = $(addprefix $(TEST_OBJDIR)/,$(addsuffix .o,$(TEST_NAMES)))
 TEST_CONTEXT_NAME  = test_context_timer
@@ -160,6 +160,7 @@ TEST_PING_WAN_NAME = test_network_ping_wan
 TEST_NET_INIT_NAME = test_network_init
 TEST_NAT_ICMP_NAME = test_nat_icmp
 TEST_NAT_UDP_NAME  = test_nat_udp
+TEST_NAT_PING_NAME = test_nat_ping
 TEST_BINDIR        = test_bin
 TEST_CONTEXT_BIN   = $(TEST_BINDIR)/$(TEST_CONTEXT_NAME).elf
 TEST_PING_LAN_BIN  = $(TEST_BINDIR)/$(TEST_PING_LAN_NAME).elf
@@ -167,13 +168,14 @@ TEST_PING_WAN_BIN  = $(TEST_BINDIR)/$(TEST_PING_WAN_NAME).elf
 TEST_NET_INIT_BIN  = $(TEST_BINDIR)/$(TEST_NET_INIT_NAME).elf
 TEST_NAT_ICMP_BIN  = $(TEST_BINDIR)/$(TEST_NAT_ICMP_NAME).elf
 TEST_NAT_UDP_BIN   = $(TEST_BINDIR)/$(TEST_NAT_UDP_NAME).elf
+TEST_NAT_PING_BIN  = $(TEST_BINDIR)/$(TEST_NAT_PING_NAME).elf
 TEST_CFLAGS        = $(filter-out -fstack-usage,$(CFLAGS))
 rm           = rm -f
 
 # ======================================================================================
 # Phony Targets / 虛擬目標宣告
 # ======================================================================================
-.PHONY: all clean remove run qemu qemu_gdb qemu-gdb gdb dqemu setup-network setup-mq-tap help test test-context test-net-init test-ping-lan test-ping-wan test-dual test-nat-icmp test-nat-udp
+.PHONY: all clean remove run qemu qemu_gdb qemu-gdb gdb dqemu setup-network setup-mq-tap help test test-context test-net-init test-ping-lan test-ping-wan test-dual test-nat-icmp test-nat-udp test-nat-ping
 
 # ======================================================================================
 # Default Build Target / 預設建置目標
@@ -612,6 +614,52 @@ test-nat-udp: $(TEST_NAT_UDP_BIN)
 		echo ""; echo "✗ TEST FAILED"; exit 1; \
 	elif [ $$status -eq 124 ]; then \
 		echo ""; echo "⚠ TEST TIMED OUT (no PASS marker)"; exit 1; \
+	else \
+		exit $$status; \
+	fi
+
+test-nat-ping: $(TEST_NAT_PING_BIN)
+	@echo "========================================="
+	@echo "Running Test Case: NAT Ping (End-to-End)"
+	@echo "========================================="
+	@echo "This test verifies NAT gateway functionality with ICMP ping"
+	@echo "Network: LAN client (192.168.1.100) -> NAT (192.168.1.1/10.3.5.99) -> WAN host (10.3.5.103)"
+	@echo ""
+	if ! ip link show $(QEMU_BRIDGE_TAP) >/dev/null 2>&1; then \
+		echo "[SKIP] TAP interface '$(QEMU_BRIDGE_TAP)' not available"; \
+		echo "      Setup: sudo ./test_nat_ping_helper.sh setup"; \
+		echo "      Or manually: sudo ip tuntap add dev $(QEMU_BRIDGE_TAP) mode tap user $$USER"; \
+		exit 0; \
+	fi; \
+	if ! ip link show $(QEMU_WAN_TAP) >/dev/null 2>&1; then \
+		echo "[SKIP] TAP interface '$(QEMU_WAN_TAP)' not available"; \
+		echo "      Setup: sudo ./test_nat_ping_helper.sh setup"; \
+		echo "      Or manually: sudo ip tuntap add dev $(QEMU_WAN_TAP) mode tap user $$USER"; \
+		exit 0; \
+	fi; \
+	echo "[INFO] TAP interfaces found, starting test..."; \
+	echo "[INFO] For interactive monitoring, run: sudo ./test_nat_ping_helper.sh monitor"; \
+	echo ""; \
+	status=0; \
+	output=$$(timeout --foreground $(QEMU_RUN_TIMEOUT)s $(QEMU) $(QEMU_BASE_FLAGS) $(QEMU_SOFT_FLAGS) \
+		-netdev tap,id=net0,ifname=$(QEMU_BRIDGE_TAP),script=no,downscript=no \
+		-device virtio-net-device,netdev=net0,bus=virtio-mmio-bus.0,mac=$(QEMU_BRIDGE_MAC) \
+		-netdev tap,id=net1,ifname=$(QEMU_WAN_TAP),script=no,downscript=no \
+		-device virtio-net-device,netdev=net1,bus=virtio-mmio-bus.1,mac=$(QEMU_WAN_MAC) \
+		-kernel $(TEST_NAT_PING_BIN) 2>&1) || status=$$?; \
+	if echo "$$output" | grep -qi "could not open /dev/net/tun"; then \
+		echo "[SKIP] Access to /dev/net/tun denied."; \
+		echo "      Options: run 'sudo setcap cap_net_admin+ep $$(command -v $(QEMU))'"; \
+		echo "      or execute this target via sudo."; \
+		exit 0; \
+	fi; \
+	echo "$$output"; \
+	if echo "$$output" | grep -q "\[PASS\]"; then \
+		echo ""; echo "✓ NAT PING TEST PASSED"; exit 0; \
+	elif echo "$$output" | grep -q "\[FAIL\]"; then \
+		echo ""; echo "✗ NAT PING TEST FAILED"; exit 1; \
+	elif [ $$status -eq 124 ]; then \
+		echo ""; echo "⚠ NAT PING TEST TIMED OUT (no PASS marker)"; exit 1; \
 	else \
 		exit $$status; \
 	fi
