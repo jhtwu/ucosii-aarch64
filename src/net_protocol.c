@@ -1,6 +1,7 @@
 #include "includes.h"
 #include "virtio_net.h"
 #include "nat.h"
+#include "router_config.h"
 #include <net.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -42,8 +43,8 @@
 #endif
 
 /* Guest network configuration */
-#define GUEST_LAN_IP   {192, 168, 1, 1}
-#define GUEST_WAN_IP   {10, 3, 5, 99}
+#define GUEST_LAN_IP   UCOSII_ROUTER_LAN_IP
+#define GUEST_WAN_IP   UCOSII_ROUTER_WAN_IP
 #define GUEST_LAN_MAC  {0x52, 0x54, 0x00, 0x12, 0x34, 0x56}
 #define GUEST_WAN_MAC  {0x52, 0x54, 0x00, 0x65, 0x43, 0x21}
 

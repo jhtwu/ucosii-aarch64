@@ -27,21 +27,21 @@
 #define LAN_HOST_IP_STR  "192.168.1.103"
 
 // ============================================================================
-// WAN Network Configuration (10.3.5.0/24)
+// WAN Network Configuration (10.0.0.0/24)
 // ============================================================================
 
 // Guest IP address (ucOS-II WAN interface)
 #ifndef WAN_GUEST_IP
-#define WAN_GUEST_IP {10u, 3u, 5u, 99u}
+#define WAN_GUEST_IP {10u, 0u, 0u, 1u}
 #endif
 
 // Host IP address (Linux host WAN TAP interface)
 #ifndef WAN_HOST_IP
-#define WAN_HOST_IP {10u, 3u, 5u, 103u}
+#define WAN_HOST_IP {10u, 0u, 0u, 2u}
 #endif
 
 // Readable string versions for printing
-#define WAN_GUEST_IP_STR "10.3.5.99"
-#define WAN_HOST_IP_STR  "10.3.5.103"
+#define WAN_GUEST_IP_STR "10.0.0.1"
+#define WAN_HOST_IP_STR  "10.0.0.2"
 
 #endif /* TEST_NETWORK_CONFIG_H */

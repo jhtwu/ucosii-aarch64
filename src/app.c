@@ -53,6 +53,7 @@
 #include  "virtio_net.h"
 #include  "net_ping.h"
 #include  "nat.h"
+#include  "router_config.h"
 
 /* Enable NAT functionality - Full NAT Router */
 #define ENABLE_NAT 1
@@ -209,7 +210,8 @@ static void  AppTaskNetwork (void *p_arg)
     uart_puts("[NAT] Initializing NAT router...\n");
     net_enable_nat();
     uart_puts("[NAT] NAT router enabled for ICMP/TCP/UDP\n");
-    uart_puts("[INFO] LAN: 192.168.1.1/24 -> WAN: 10.3.5.99\n");
+    uart_puts("[INFO] LAN: " UCOSII_ROUTER_LAN_IP_STR "/24 -> WAN: "
+              UCOSII_ROUTER_WAN_IP_STR "\n");
     uart_puts("[INFO] Ready to forward traffic from LAN to WAN\n\n");
 #endif
 
